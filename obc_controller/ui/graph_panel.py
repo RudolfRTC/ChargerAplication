@@ -4,6 +4,8 @@ Three separate sub-plots with linked X axes:
   1. Voltage: Vout and Vin (V)
   2. Current: Iout (A)
   3. Temperature: Temp (deg C)
+
+Supports event markers (vertical lines + labels) across all plots.
 """
 
 from __future__ import annotations
@@ -14,7 +16,8 @@ from collections import deque
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -33,6 +36,7 @@ from obc_controller.ui.theme import (
     GREEN,
     MAGENTA,
     ORANGE,
+    RED,
     TEXT_DIM,
 )
 
@@ -44,12 +48,21 @@ WINDOW_OPTIONS = {
     "30 min": 1800,
 }
 
+# Severity → line colour
+_SEV_COLORS = {
+    "info": CYAN,
+    "warning": ORANGE,
+    "error": RED,
+}
+
 # Apply pyqtgraph global dark config
 pg.setConfigOptions(
     antialias=True,
     background=BG_DEEP,
     foreground=TEXT_DIM,
 )
+
+_MARKER_FONT = QFont("sans-serif", 8)
 
 
 class GraphPanel(QGroupBox):
@@ -69,6 +82,10 @@ class GraphPanel(QGroupBox):
         self._status: deque[int] = deque(maxlen=maxlen)
 
         self._window_sec = 600  # default 10 min
+
+        # Event markers: [(timestamp, label, severity, [lines], text_item)]
+        self._markers: list[tuple] = []
+        self._marker_data: list[tuple[float, str, str]] = []
 
         layout = QVBoxLayout(self)
 
@@ -148,6 +165,9 @@ class GraphPanel(QGroupBox):
         self._p_curr.setXLink(self._p_volt)
         self._p_temp.setXLink(self._p_volt)
 
+        # All three plots for marker iteration
+        self._plots = (self._p_volt, self._p_curr, self._p_temp)
+
         # Redraw timer (~15 Hz)
         self._redraw_timer = QTimer(self)
         self._redraw_timer.timeout.connect(self._redraw)
@@ -164,6 +184,33 @@ class GraphPanel(QGroupBox):
         self._temp.append(msg.temperature)
         self._status.append(msg.status.to_byte())
 
+    def add_event_marker(
+        self, label: str, severity: str = "info"
+    ) -> None:
+        """Add a vertical event marker across all 3 plots.
+
+        *severity* is one of ``"info"``, ``"warning"``, ``"error"``.
+        The marker line + label is drawn on all three plots (X-linked).
+        """
+        t = time.monotonic() - self._t0
+        color = _SEV_COLORS.get(severity, CYAN)
+        pen = pg.mkPen(color, width=1.5, style=Qt.PenStyle.DashLine)
+
+        lines: list = []
+        for plot in self._plots:
+            line = pg.InfiniteLine(pos=t, angle=90, pen=pen)
+            plot.addItem(line)
+            lines.append(line)
+
+        # Text label on the voltage plot (top)
+        text_item = pg.TextItem(text=label, color=color, anchor=(0, 0))
+        text_item.setFont(_MARKER_FONT)
+        text_item.setPos(t, 0)
+        self._p_volt.addItem(text_item)
+
+        self._markers.append((t, label, severity, lines, text_item))
+        self._marker_data.append((t, label, severity))
+
     # ---- internal ---------------------------------------------------------
 
     def _redraw(self) -> None:
@@ -179,6 +226,13 @@ class GraphPanel(QGroupBox):
         self._curve_vin.setData(t, np.array(self._vin)[mask])
         self._curve_iout.setData(t, np.array(self._iout)[mask])
         self._curve_temp.setData(t, np.array(self._temp)[mask])
+
+        # Reposition marker labels near top of voltage plot
+        if self._markers:
+            vr = self._p_volt.viewRange()
+            y_top = vr[1][0] + 0.92 * (vr[1][1] - vr[1][0])
+            for m_t, _, _, _, text_item in self._markers:
+                text_item.setPos(m_t, y_top)
 
     def _on_pause_toggled(self, checked: bool) -> None:
         self._paused = checked
@@ -200,6 +254,14 @@ class GraphPanel(QGroupBox):
         self._curve_iout.setData([], [])
         self._curve_temp.setData([], [])
 
+        # Remove marker graphics
+        for _, _, _, lines, text_item in self._markers:
+            for plot, line in zip(self._plots, lines):
+                plot.removeItem(line)
+            self._p_volt.removeItem(text_item)
+        self._markers.clear()
+        self._marker_data.clear()
+
     def _export_csv(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
@@ -212,7 +274,14 @@ class GraphPanel(QGroupBox):
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(
-                ["timestamp_s", "Vout_V", "Iout_A", "Vin_V", "Temp_C", "status_flags"]
+                [
+                    "timestamp_s",
+                    "Vout_V",
+                    "Iout_A",
+                    "Vin_V",
+                    "Temp_C",
+                    "status_flags",
+                ]
             )
             for i in range(len(self._ts)):
                 writer.writerow([
@@ -223,3 +292,11 @@ class GraphPanel(QGroupBox):
                     f"{self._temp[i]:.1f}",
                     f"0x{self._status[i]:02X}",
                 ])
+
+            # Append events section
+            if self._marker_data:
+                writer.writerow([])
+                writer.writerow(["# EVENTS"])
+                writer.writerow(["timestamp_s", "event_label", "severity"])
+                for t, label, sev in self._marker_data:
+                    writer.writerow([f"{t:.3f}", label, sev])

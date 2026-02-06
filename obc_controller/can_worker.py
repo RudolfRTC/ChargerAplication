@@ -6,12 +6,14 @@ Handles:
   - Periodic Message1 TX (500 ms) with optional ramp (soft-start)
   - Message2 RX with timeout alarm (5 s)
   - Safe-stop on disconnect (sends Control=1 for several cycles)
+  - TX/RX health stats and status-bit change detection
 """
 
 from __future__ import annotations
 
 import logging
 import time
+from collections import deque
 from typing import Optional
 
 import can
@@ -40,6 +42,22 @@ BAUD_FRAME1 = bytes([0x07, 0x01, 0x00, 0x00, 0x3D, 0x8A, 0x09, 0x00])
 BAUD_FRAME2 = bytes([0x07, 0x02, 0x0E, 0x00, 0x71, 0xB7, 0x0F, 0x00])
 BAUD_FRAME2_COUNT = 7
 BAUD_FRAME2_INTERVAL_S = 0.5
+
+# Status bit names for change detection
+_STATUS_BIT_NAMES = {
+    0: "HW_FAIL",
+    1: "OVER_TEMP",
+    2: "INPUT_V_ERR",
+    3: "STARTING",
+    4: "COMM_TIMEOUT",
+}
+
+
+def _calc_rate(times: deque, now: float, window: float = 2.0) -> float:
+    """Count messages in the last *window* seconds and return rate (Hz)."""
+    cutoff = now - window
+    count = sum(1 for t in times if t >= cutoff)
+    return count / window
 
 
 class BaudrateSwitchWorker(QThread):
@@ -134,6 +152,10 @@ class CANWorker(QThread):
     tx_message = Signal(object)         # Message1 sent (for log)
     ramp_state = Signal(bool, float, float)  # active, ramped_v, ramped_a
 
+    # Health & diagnostics
+    health_stats = Signal(float, float, float)    # tx_rate, rx_rate, last_rx_age
+    status_bit_changed = Signal(int, str, bool)   # bit_idx, name, is_fault
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._bus: Optional[can.Bus] = None
@@ -156,6 +178,11 @@ class CANWorker(QThread):
         self._interface = "pcan"
         self._channel = "PCAN_USBBUS1"
         self._bitrate = 250000
+
+        # Health tracking
+        self._tx_times: deque[float] = deque(maxlen=20)
+        self._rx_times: deque[float] = deque(maxlen=20)
+        self._prev_status_byte: int | None = None
 
     # ---- public setters (called from UI thread) --------------------------
 
@@ -208,7 +235,7 @@ class CANWorker(QThread):
             if self._interface == "pcan":
                 self.log_message.emit(
                     f"Connecting PCAN channel={self._channel} "
-                    f"bitrate={self._bitrate} …"
+                    f"bitrate={self._bitrate} \u2026"
                 )
             self._bus = can.Bus(**kwargs)
             self.log_message.emit("CAN bus connected.")
@@ -304,10 +331,17 @@ class CANWorker(QThread):
                     try:
                         self._bus.send(frame)
                         last_tx_time = now
+                        self._tx_times.append(now)
                         self.tx_message.emit(msg1)
                         self.ramp_state.emit(ramp_active, send_v, send_a)
                     except can.CanError as exc:
                         self.log_message.emit(f"TX error: {exc}")
+
+                    # Emit health stats every TX cycle
+                    tx_rate = _calc_rate(self._tx_times, now)
+                    rx_rate = _calc_rate(self._rx_times, now)
+                    rx_age = now - last_rx_time
+                    self.health_stats.emit(tx_rate, rx_rate, rx_age)
 
                 # ---- RX --------------------------------------------------
                 try:
@@ -321,11 +355,28 @@ class CANWorker(QThread):
                         msg2 = Message2.decode(frame.data)
                         self.message2_received.emit(msg2)
                         last_rx_time = now
+                        self._rx_times.append(now)
                         if alarm_active:
                             alarm_active = False
                             self.log_message.emit(
-                                "Message2 received — timeout cleared."
+                                "Message2 received \u2014 timeout cleared."
                             )
+
+                        # Detect status bit changes
+                        new_status = msg2.status.to_byte()
+                        if self._prev_status_byte is not None:
+                            xor = new_status ^ self._prev_status_byte
+                            for bit in range(5):
+                                if xor & (1 << bit):
+                                    name = _STATUS_BIT_NAMES.get(
+                                        bit, f"bit{bit}"
+                                    )
+                                    is_fault = bool(new_status & (1 << bit))
+                                    self.status_bit_changed.emit(
+                                        bit, name, is_fault
+                                    )
+                        self._prev_status_byte = new_status
+
                     except Exception as exc:
                         self.log_message.emit(
                             f"Message2 decode error: {exc}"
@@ -351,7 +402,7 @@ class CANWorker(QThread):
         """Send Control=1 (stop) for several cycles before shutting down."""
         if self._bus is None:
             return
-        self.log_message.emit("Safe-stop: sending Control=STOP …")
+        self.log_message.emit("Safe-stop: sending Control=STOP \u2026")
         msg1 = Message1(
             voltage_setpoint=0,
             current_setpoint=0,
