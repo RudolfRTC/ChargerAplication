@@ -40,6 +40,7 @@ class ControlPanel(QGroupBox):
         self._current_control = ChargerControl.STOP_OUTPUTTING
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(8)
 
         # ---- Profiles section ----
         prof_group = QGroupBox("Profiles")
@@ -48,7 +49,7 @@ class ControlPanel(QGroupBox):
         prof_row1 = QHBoxLayout()
         prof_row1.addWidget(QLabel("Profile:"))
         self._profile_combo = QComboBox()
-        self._profile_combo.setMinimumWidth(160)
+        self._profile_combo.setMinimumWidth(120)
         prof_row1.addWidget(self._profile_combo, stretch=1)
         prof_layout.addLayout(prof_row1)
 
@@ -64,58 +65,50 @@ class ControlPanel(QGroupBox):
         layout.addWidget(prof_group)
 
         # ---- Setpoints ----
+        sp_group = QGroupBox("Setpoints")
+        sp_layout = QVBoxLayout(sp_group)
+
         row_v = QHBoxLayout()
-        row_v.addWidget(QLabel("Max charging voltage (V):"))
+        row_v.addWidget(QLabel("Voltage (V):"))
         self._voltage_spin = QDoubleSpinBox()
         self._voltage_spin.setRange(0.0, 6553.5)
         self._voltage_spin.setDecimals(1)
         self._voltage_spin.setSingleStep(0.1)
         self._voltage_spin.setValue(320.0)
-        row_v.addWidget(self._voltage_spin)
-        layout.addLayout(row_v)
+        row_v.addWidget(self._voltage_spin, stretch=1)
+        sp_layout.addLayout(row_v)
 
         row_i = QHBoxLayout()
-        row_i.addWidget(QLabel("Max charging current (A):"))
+        row_i.addWidget(QLabel("Current (A):"))
         self._current_spin = QDoubleSpinBox()
         self._current_spin.setRange(0.0, 6553.5)
         self._current_spin.setDecimals(1)
         self._current_spin.setSingleStep(0.1)
         self._current_spin.setValue(50.0)
-        row_i.addWidget(self._current_spin)
-        layout.addLayout(row_i)
+        row_i.addWidget(self._current_spin, stretch=1)
+        sp_layout.addLayout(row_i)
+
+        layout.addWidget(sp_group)
 
         # ---- Mode buttons ----
-        btn_row = QHBoxLayout()
         self._start_btn = QPushButton("Start Charging")
-        self._start_btn.setStyleSheet(
-            "QPushButton { background-color: #4CAF50; color: white; "
-            "padding: 6px 16px; font-weight: bold; }"
-        )
+        self._start_btn.setObjectName("btn_start")
         self._stop_btn = QPushButton("Stop Outputting")
-        self._stop_btn.setStyleSheet(
-            "QPushButton { background-color: #f44336; color: white; "
-            "padding: 6px 16px; font-weight: bold; }"
-        )
-        self._heat_btn = QPushButton("Heating / DC Supply")
-        self._heat_btn.setStyleSheet(
-            "QPushButton { background-color: #FF9800; color: white; "
-            "padding: 6px 16px; font-weight: bold; }"
-        )
-        btn_row.addWidget(self._start_btn)
-        btn_row.addWidget(self._stop_btn)
-        btn_row.addWidget(self._heat_btn)
-        layout.addLayout(btn_row)
+        self._stop_btn.setObjectName("btn_stop")
+        self._heat_btn = QPushButton("Heating / DC")
+        self._heat_btn.setObjectName("btn_heat")
+
+        layout.addWidget(self._start_btn)
+        layout.addWidget(self._stop_btn)
+        layout.addWidget(self._heat_btn)
 
         self._mode_label = QLabel("Mode: STOP")
-        self._mode_label.setStyleSheet("font-weight: bold; font-size: 13px;")
+        self._mode_label.setObjectName("mode_label")
         layout.addWidget(self._mode_label)
 
         # ---- Instant preset ----
-        self._instant_btn = QPushButton("Set 360V / 9A (Instant)")
-        self._instant_btn.setStyleSheet(
-            "QPushButton { background-color: #9C27B0; color: white; "
-            "padding: 8px 16px; font-weight: bold; font-size: 13px; }"
-        )
+        self._instant_btn = QPushButton("\u26a1 360V / 9A Instant")
+        self._instant_btn.setObjectName("btn_instant")
         self._instant_btn.setToolTip(
             "One-touch: 360V / 9A, ramp OFF, Heating/DC Supply mode"
         )
@@ -129,40 +122,36 @@ class ControlPanel(QGroupBox):
         ramp_layout.addWidget(self._ramp_check)
 
         ramp_v_row = QHBoxLayout()
-        ramp_v_row.addWidget(QLabel("Voltage ramp (V/s):"))
+        ramp_v_row.addWidget(QLabel("V/s:"))
         self._ramp_v_spin = QDoubleSpinBox()
         self._ramp_v_spin.setRange(0.1, 500.0)
         self._ramp_v_spin.setDecimals(1)
         self._ramp_v_spin.setSingleStep(0.5)
         self._ramp_v_spin.setValue(5.0)
-        ramp_v_row.addWidget(self._ramp_v_spin)
+        ramp_v_row.addWidget(self._ramp_v_spin, stretch=1)
         ramp_layout.addLayout(ramp_v_row)
 
         ramp_a_row = QHBoxLayout()
-        ramp_a_row.addWidget(QLabel("Current ramp (A/s):"))
+        ramp_a_row.addWidget(QLabel("A/s:"))
         self._ramp_a_spin = QDoubleSpinBox()
         self._ramp_a_spin.setRange(0.1, 500.0)
         self._ramp_a_spin.setDecimals(1)
         self._ramp_a_spin.setSingleStep(0.1)
         self._ramp_a_spin.setValue(0.5)
-        ramp_a_row.addWidget(self._ramp_a_spin)
+        ramp_a_row.addWidget(self._ramp_a_spin, stretch=1)
         ramp_layout.addLayout(ramp_a_row)
 
-        # Ramp status display
-        ramp_status_row = QHBoxLayout()
+        # Ramp status
         self._ramp_active_label = QLabel("")
-        self._ramp_active_label.setStyleSheet("color: #2196F3; font-weight: bold;")
-        ramp_status_row.addWidget(self._ramp_active_label)
-        ramp_status_row.addStretch()
-        ramp_layout.addLayout(ramp_status_row)
+        self._ramp_active_label.setObjectName("ramp_active")
+        ramp_layout.addWidget(self._ramp_active_label)
 
-        ramp_vals_row = QHBoxLayout()
-        self._ramp_v_actual = QLabel("Ramped V: —")
-        self._ramp_a_actual = QLabel("Ramped A: —")
-        ramp_vals_row.addWidget(self._ramp_v_actual)
-        ramp_vals_row.addWidget(self._ramp_a_actual)
-        ramp_vals_row.addStretch()
-        ramp_layout.addLayout(ramp_vals_row)
+        ramp_vals = QHBoxLayout()
+        self._ramp_v_actual = QLabel("V: \u2014")
+        self._ramp_a_actual = QLabel("A: \u2014")
+        ramp_vals.addWidget(self._ramp_v_actual)
+        ramp_vals.addWidget(self._ramp_a_actual)
+        ramp_layout.addLayout(ramp_vals)
 
         layout.addWidget(ramp_group)
 
@@ -317,13 +306,13 @@ class ControlPanel(QGroupBox):
         self, active: bool, ramped_v: float, ramped_a: float
     ) -> None:
         if active:
-            self._ramp_active_label.setText("RAMP ACTIVE")
-            self._ramp_v_actual.setText(f"Ramped V: {ramped_v:.1f}")
-            self._ramp_a_actual.setText(f"Ramped A: {ramped_a:.1f}")
+            self._ramp_active_label.setText("\u25b6 RAMP ACTIVE")
+            self._ramp_v_actual.setText(f"V: {ramped_v:.1f}")
+            self._ramp_a_actual.setText(f"A: {ramped_a:.1f}")
         else:
             self._ramp_active_label.setText("")
-            self._ramp_v_actual.setText("Ramped V: —")
-            self._ramp_a_actual.setText("Ramped A: —")
+            self._ramp_v_actual.setText("V: \u2014")
+            self._ramp_a_actual.setText("A: \u2014")
 
     # ---- Public getters ----
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QGroupBox,
     QHBoxLayout,
@@ -11,7 +12,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QVBoxLayout,
-    QCheckBox,
 )
 
 
@@ -24,64 +24,63 @@ class ConnectionPanel(QGroupBox):
         super().__init__("Connection", parent)
 
         layout = QVBoxLayout(self)
+        layout.setSpacing(8)
 
-        # Row 1: backend + channel
+        # Row 1: backend
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("Backend:"))
         self._backend_combo = QComboBox()
         self._backend_combo.addItems(["pcan", "socketcan"])
-        row1.addWidget(self._backend_combo)
-
-        row1.addWidget(QLabel("Channel:"))
-        self._channel_edit = QLineEdit("PCAN_USBBUS1")
-        self._channel_edit.setMinimumWidth(140)
-        row1.addWidget(self._channel_edit)
+        row1.addWidget(self._backend_combo, stretch=1)
         layout.addLayout(row1)
 
-        # Row 2: bitrate + simulate
+        # Row 2: channel
         row2 = QHBoxLayout()
-        row2.addWidget(QLabel("CAN bitrate:"))
-        self._bitrate_combo = QComboBox()
-        self._bitrate_combo.addItems(["250000", "500000"])
-        row2.addWidget(self._bitrate_combo)
-
-        self._sim_check = QCheckBox("Simulate (no HW)")
-        row2.addWidget(self._sim_check)
-        row2.addStretch()
+        row2.addWidget(QLabel("Channel:"))
+        self._channel_edit = QLineEdit("PCAN_USBBUS1")
+        row2.addWidget(self._channel_edit, stretch=1)
         layout.addLayout(row2)
 
-        # Row 3: connect / disconnect + status
+        # Row 3: bitrate
         row3 = QHBoxLayout()
-        self._connect_btn = QPushButton("Connect")
-        self._disconnect_btn = QPushButton("Disconnect")
-        self._disconnect_btn.setEnabled(False)
-        self._status_label = QLabel("Disconnected")
-        self._status_label.setStyleSheet("color: gray; font-weight: bold;")
-
-        row3.addWidget(self._connect_btn)
-        row3.addWidget(self._disconnect_btn)
-        row3.addWidget(self._status_label)
-        row3.addStretch()
+        row3.addWidget(QLabel("CAN bitrate:"))
+        self._bitrate_combo = QComboBox()
+        self._bitrate_combo.addItems(["250000", "500000"])
+        row3.addWidget(self._bitrate_combo, stretch=1)
         layout.addLayout(row3)
 
-        # Row 4: Service — baudrate switch
-        row4 = QHBoxLayout()
-        self._baud_switch_btn = QPushButton("Change Baudrate to 500k")
-        self._baud_switch_btn.setStyleSheet(
-            "QPushButton { background-color: #607D8B; color: white; "
-            "padding: 6px 14px; font-weight: bold; }"
-            "QPushButton:disabled { background-color: #B0BEC5; }"
-        )
+        # Row 4: simulate checkbox
+        self._sim_check = QCheckBox("Simulate (no HW)")
+        layout.addWidget(self._sim_check)
+
+        # Row 5: connect / disconnect
+        btn_row = QHBoxLayout()
+        self._connect_btn = QPushButton("Connect")
+        self._connect_btn.setObjectName("btn_connect")
+        self._disconnect_btn = QPushButton("Disconnect")
+        self._disconnect_btn.setObjectName("btn_disconnect")
+        self._disconnect_btn.setEnabled(False)
+        btn_row.addWidget(self._connect_btn)
+        btn_row.addWidget(self._disconnect_btn)
+        layout.addLayout(btn_row)
+
+        # Status label
+        self._status_label = QLabel("Disconnected")
+        self._status_label.setObjectName("status_disconnected")
+        layout.addWidget(self._status_label)
+
+        # Baudrate switch section
+        self._baud_switch_btn = QPushButton("Baudrate \u2192 500k")
+        self._baud_switch_btn.setObjectName("btn_baud")
         self._baud_switch_btn.setToolTip(
             "Send CAN sequence to switch OBC device to 500 kbps"
         )
         self._baud_switch_btn.setEnabled(False)
+        layout.addWidget(self._baud_switch_btn)
+
         self._baud_status = QLabel("")
-        self._baud_status.setStyleSheet("font-weight: bold;")
-        row4.addWidget(self._baud_switch_btn)
-        row4.addWidget(self._baud_status)
-        row4.addStretch()
-        layout.addLayout(row4)
+        self._baud_status.setObjectName("baud_status")
+        layout.addWidget(self._baud_status)
 
         # Signals
         self._connect_btn.clicked.connect(self._on_connect)
@@ -117,32 +116,30 @@ class ConnectionPanel(QGroupBox):
         self._sim_check.setEnabled(not connected)
         self._baud_switch_btn.setEnabled(connected)
         if connected:
-            self._status_label.setText("Connected")
-            self._status_label.setStyleSheet(
-                "color: green; font-weight: bold;"
-            )
+            self._status_label.setText("\u25cf  Connected")
+            self._status_label.setObjectName("status_connected")
         else:
-            self._status_label.setText("Disconnected")
-            self._status_label.setStyleSheet(
-                "color: gray; font-weight: bold;"
-            )
-            self._baud_status.setText("")
+            self._status_label.setText("\u25cb  Disconnected")
+            self._status_label.setObjectName("status_disconnected")
+        # Force style recalculation after objectName change
+        self._status_label.style().unpolish(self._status_label)
+        self._status_label.style().polish(self._status_label)
+        self._baud_status.setText("")
 
     def set_baud_switch_busy(self, busy: bool) -> None:
-        """Disable/enable the button while sequence is running."""
         self._baud_switch_btn.setEnabled(not busy)
 
     def set_baud_switch_progress(self, step: int, total: int) -> None:
         self._baud_status.setText(
-            f"Switching baudrate to 500k… ({step}/{total})"
+            f"Switching\u2026 ({step}/{total})"
         )
         self._baud_status.setStyleSheet(
             "color: #FF9800; font-weight: bold;"
         )
 
     def set_baud_switch_done(self) -> None:
-        self._baud_status.setText("Baudrate switch done")
+        self._baud_status.setText("\u2713 Baudrate switch done")
         self._baud_status.setStyleSheet(
-            "color: green; font-weight: bold;"
+            "color: #00e676; font-weight: bold;"
         )
         self._baud_switch_btn.setEnabled(True)
