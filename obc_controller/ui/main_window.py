@@ -1,10 +1,16 @@
-"""Main application window — wires all panels together."""
+"""Main application window — 3-column space-themed layout."""
 
 from __future__ import annotations
 
-from PySide6.QtCore import Slot
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QDialog,
+    QFrame,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QScrollArea,
     QSplitter,
@@ -13,6 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from obc_controller.__version__ import __version__
 from obc_controller.can_protocol import ChargerControl
 from obc_controller.can_worker import BaudrateSwitchWorker, CANWorker
 from obc_controller.simulator import Simulator
@@ -21,65 +28,144 @@ from obc_controller.ui.control_panel import ControlPanel
 from obc_controller.ui.graph_panel import GraphPanel
 from obc_controller.ui.log_panel import LogPanel
 from obc_controller.ui.telemetry_panel import TelemetryPanel
+from obc_controller.ui.theme import COMPANY, ADDRESS, MADE_BY, CYAN, TEXT_DIM
+
+_ASSETS = Path(__file__).parent / "assets"
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("OBC Charger Controller")
-        self.resize(1100, 800)
+        self.setWindowTitle(f"OBC Charger Controller — {COMPANY}")
+        self.resize(1280, 860)
 
         self._worker: CANWorker | None = None
         self._simulator: Simulator | None = None
         self._baud_worker: BaudrateSwitchWorker | None = None
         self._sim_mode = False
 
-        # --- build UI ---
+        # --- central widget ---
         central = QWidget()
+        central.setObjectName("central")
         self.setCentralWidget(central)
-        root_layout = QVBoxLayout(central)
+        root = QVBoxLayout(central)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # Connection panel (always visible at top)
+        # ── header ──────────────────────────────────────────────
+        header = QFrame()
+        header.setObjectName("header")
+        header.setFixedHeight(64)
+        h_lay = QHBoxLayout(header)
+        h_lay.setContentsMargins(16, 4, 16, 4)
+
+        logo_path = _ASSETS / "rtc_logo.png"
+        if logo_path.exists():
+            logo_lbl = QLabel()
+            pm = QPixmap(str(logo_path)).scaled(
+                48, 48, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_lbl.setPixmap(pm)
+            h_lay.addWidget(logo_lbl)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(0)
+        title_lbl = QLabel("OBC CHARGER CONTROLLER")
+        title_lbl.setObjectName("header_title")
+        subtitle_lbl = QLabel(f"{COMPANY}  ·  {ADDRESS}")
+        subtitle_lbl.setObjectName("header_subtitle")
+        title_col.addWidget(title_lbl)
+        title_col.addWidget(subtitle_lbl)
+        h_lay.addLayout(title_col, stretch=1)
+
+        about_btn_lbl = QLabel(f"<a style='color:{CYAN};' href='#'>About</a>")
+        about_btn_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        about_btn_lbl.linkActivated.connect(self._show_about)
+        h_lay.addWidget(about_btn_lbl)
+
+        root.addWidget(header)
+
+        # ── 3-column body ───────────────────────────────────────
+        body_splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left sidebar — Connection
+        left_widget = QWidget()
+        left_widget.setObjectName("left_sidebar")
+        left_widget.setMinimumWidth(240)
+        left_widget.setMaximumWidth(340)
+        left_inner = QVBoxLayout(left_widget)
+        left_inner.setContentsMargins(6, 6, 6, 6)
         self._conn_panel = ConnectionPanel()
-        root_layout.addWidget(self._conn_panel)
+        left_inner.addWidget(self._conn_panel)
+        left_inner.addStretch()
 
-        # Tab widget with two tabs: Dashboard and Graph
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setWidget(left_widget)
+        left_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        body_splitter.addWidget(left_scroll)
+
+        # Center — Tabs (Graphs / Log) + Telemetry
+        center = QWidget()
+        center_lay = QVBoxLayout(center)
+        center_lay.setContentsMargins(4, 4, 4, 4)
+
         tabs = QTabWidget()
-        root_layout.addWidget(tabs, stretch=1)
-
-        # --- Dashboard tab ---
-        dash_widget = QWidget()
-        dash_layout = QHBoxLayout(dash_widget)
-
-        # Left column in a scroll area (control panel can be tall now)
-        left_inner = QWidget()
-        left_col = QVBoxLayout(left_inner)
-        self._ctrl_panel = ControlPanel()
-        self._tele_panel = TelemetryPanel()
-        left_col.addWidget(self._ctrl_panel)
-        left_col.addWidget(self._tele_panel)
-        left_col.addStretch()
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setWidget(left_inner)
-
-        self._log_panel = LogPanel()
-
-        splitter = QSplitter()
-        splitter.addWidget(scroll)
-        splitter.addWidget(self._log_panel)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
-        dash_layout.addWidget(splitter)
-
-        tabs.addTab(dash_widget, "Dashboard")
-
-        # --- Graph tab ---
         self._graph_panel = GraphPanel()
-        tabs.addTab(self._graph_panel, "Graph")
+        self._log_panel = LogPanel()
+        tabs.addTab(self._graph_panel, "Graphs")
+        tabs.addTab(self._log_panel, "Log")
+        center_lay.addWidget(tabs, stretch=3)
 
-        # --- wire signals ---
+        self._tele_panel = TelemetryPanel()
+        center_lay.addWidget(self._tele_panel, stretch=0)
+
+        body_splitter.addWidget(center)
+
+        # Right sidebar — Control
+        right_widget = QWidget()
+        right_widget.setObjectName("right_sidebar")
+        right_widget.setMinimumWidth(260)
+        right_widget.setMaximumWidth(380)
+        right_inner = QVBoxLayout(right_widget)
+        right_inner.setContentsMargins(6, 6, 6, 6)
+        self._ctrl_panel = ControlPanel()
+        right_inner.addWidget(self._ctrl_panel)
+        right_inner.addStretch()
+
+        right_scroll = QScrollArea()
+        right_scroll.setWidgetResizable(True)
+        right_scroll.setWidget(right_widget)
+        right_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        body_splitter.addWidget(right_scroll)
+
+        # Splitter proportions: left 20%, center 55%, right 25%
+        body_splitter.setStretchFactor(0, 2)
+        body_splitter.setStretchFactor(1, 5)
+        body_splitter.setStretchFactor(2, 2)
+        root.addWidget(body_splitter, stretch=1)
+
+        # ── footer ──────────────────────────────────────────────
+        footer = QFrame()
+        footer.setObjectName("footer")
+        footer.setFixedHeight(28)
+        f_lay = QHBoxLayout(footer)
+        f_lay.setContentsMargins(12, 0, 12, 0)
+        f_left = QLabel(f"{MADE_BY}  ·  {COMPANY}, {ADDRESS}")
+        f_left.setObjectName("footer_text")
+        f_right = QLabel(f"v{__version__}")
+        f_right.setObjectName("footer_text")
+        f_lay.addWidget(f_left)
+        f_lay.addStretch()
+        f_lay.addWidget(f_right)
+        root.addWidget(footer)
+
+        # ── wire signals ────────────────────────────────────────
         self._conn_panel.connect_requested.connect(self._on_connect)
         self._conn_panel.disconnect_requested.connect(self._on_disconnect)
         self._conn_panel.baudrate_switch_requested.connect(
@@ -92,6 +178,51 @@ class MainWindow(QMainWindow):
         self._ctrl_panel.profile_loaded.connect(self._on_profile_loaded)
         self._ctrl_panel.log_message.connect(self._log_panel.append)
 
+    # ---- About dialog ----------------------------------------------------
+
+    def _show_about(self) -> None:
+        dlg = QDialog(self)
+        dlg.setWindowTitle("About OBC Charger Controller")
+        dlg.setFixedSize(420, 320)
+        lay = QVBoxLayout(dlg)
+        lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.setSpacing(12)
+
+        logo_path = _ASSETS / "rtc_logo.png"
+        if logo_path.exists():
+            logo_lbl = QLabel()
+            pm = QPixmap(str(logo_path)).scaled(
+                96, 96, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            logo_lbl.setPixmap(pm)
+            logo_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lay.addWidget(logo_lbl)
+
+        title = QLabel("OBC Charger Controller")
+        title.setStyleSheet(
+            f"font-size: 18px; font-weight: bold; color: {CYAN};"
+        )
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(title)
+
+        ver = QLabel(f"Version {__version__}")
+        ver.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        lay.addWidget(ver)
+
+        company = QLabel(f"{COMPANY}\n{ADDRESS}")
+        company.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        company.setStyleSheet(f"color: {TEXT_DIM};")
+        lay.addWidget(company)
+
+        made = QLabel(MADE_BY)
+        made.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        made.setStyleSheet(f"color: {CYAN}; font-weight: bold;")
+        lay.addWidget(made)
+
+        lay.addStretch()
+        dlg.exec()
+
     # ---- connection management -------------------------------------------
 
     @Slot(str, str, int, bool)
@@ -101,7 +232,7 @@ class MainWindow(QMainWindow):
         self._sim_mode = simulate
 
         if simulate:
-            self._log_panel.append("Starting simulation mode …")
+            self._log_panel.append("Starting simulation mode \u2026")
             self._simulator = Simulator()
             self._simulator.message2_received.connect(self._on_message2)
             self._simulator.log_message.connect(self._log_panel.append)
@@ -151,9 +282,9 @@ class MainWindow(QMainWindow):
             return
 
         if self._worker is not None:
-            self._log_panel.append("Disconnecting …")
+            self._log_panel.append("Disconnecting \u2026")
             self._worker.request_stop()
-            self._worker.wait(10000)  # wait for safe-stop
+            self._worker.wait(10000)
             self._worker = None
 
     # ---- worker signal handlers ------------------------------------------
@@ -276,7 +407,6 @@ class MainWindow(QMainWindow):
     # ---- window close ----------------------------------------------------
 
     def closeEvent(self, event) -> None:
-        # Stop baudrate switch if running
         if self._baud_worker is not None and self._baud_worker.isRunning():
             self._baud_worker.request_stop()
             self._baud_worker.wait(5000)

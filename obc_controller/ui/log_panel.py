@@ -1,4 +1,4 @@
-"""Log panel: scrollable log view with save functionality."""
+"""Log panel: terminal-style scrollable log with save functionality."""
 
 from __future__ import annotations
 
@@ -6,12 +6,12 @@ import time
 from pathlib import Path
 
 from PySide6.QtWidgets import (
+    QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QPlainTextEdit,
     QPushButton,
     QVBoxLayout,
-    QFileDialog,
 )
 
 

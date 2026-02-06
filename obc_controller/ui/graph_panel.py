@@ -1,12 +1,9 @@
-"""Real-time graph panel using pyqtgraph.
+"""Real-time graph panel using pyqtgraph — dark space theme.
 
 Three separate sub-plots with linked X axes:
   1. Voltage: Vout and Vin (V)
   2. Current: Iout (A)
   3. Temperature: Temp (deg C)
-
-Data is appended from the CAN thread; a Qt timer redraws at ~15 Hz so the UI
-stays responsive regardless of CAN message rate.
 """
 
 from __future__ import annotations
@@ -29,6 +26,15 @@ from PySide6.QtWidgets import (
 )
 
 from obc_controller.can_protocol import Message2
+from obc_controller.ui.theme import (
+    BG_DEEP,
+    BORDER,
+    CYAN,
+    GREEN,
+    MAGENTA,
+    ORANGE,
+    TEXT_DIM,
+)
 
 # Time-window options (minutes)
 WINDOW_OPTIONS = {
@@ -37,6 +43,13 @@ WINDOW_OPTIONS = {
     "10 min": 600,
     "30 min": 1800,
 }
+
+# Apply pyqtgraph global dark config
+pg.setConfigOptions(
+    antialias=True,
+    background=BG_DEEP,
+    foreground=TEXT_DIM,
+)
 
 
 class GraphPanel(QGroupBox):
@@ -85,58 +98,64 @@ class GraphPanel(QGroupBox):
         layout.addLayout(ctrl_row)
 
         # --- pyqtgraph widget with 3 rows ---
-        pg.setConfigOptions(antialias=True)
         self._graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self._graphics)
 
+        grid_pen = pg.mkPen(BORDER, width=0.5)
+
         # Plot 1: Voltage (Vout + Vin)
         self._p_volt = self._graphics.addPlot(row=0, col=0, title="Voltage")
-        self._p_volt.setLabel("left", "Voltage", units="V")
-        self._p_volt.setLabel("bottom", "Time", units="s")
-        self._p_volt.addLegend()
-        self._p_volt.showGrid(x=True, y=True, alpha=0.3)
+        self._p_volt.setLabel("left", "V", color=TEXT_DIM)
+        self._p_volt.setLabel("bottom", "s", color=TEXT_DIM)
+        self._p_volt.addLegend(brush=(17, 24, 39, 180))
+        self._p_volt.showGrid(x=True, y=True, alpha=0.15)
+        self._p_volt.getAxis("bottom").setPen(grid_pen)
+        self._p_volt.getAxis("left").setPen(grid_pen)
         self._curve_vout = self._p_volt.plot(
-            pen=pg.mkPen("y", width=2), name="Vout"
+            pen=pg.mkPen(CYAN, width=2), name="Vout"
         )
         self._curve_vin = self._p_volt.plot(
-            pen=pg.mkPen("c", width=2), name="Vin"
+            pen=pg.mkPen(MAGENTA, width=2), name="Vin"
         )
 
         # Plot 2: Current (Iout only)
         self._p_curr = self._graphics.addPlot(row=1, col=0, title="Current")
-        self._p_curr.setLabel("left", "Current", units="A")
-        self._p_curr.setLabel("bottom", "Time", units="s")
-        self._p_curr.addLegend()
-        self._p_curr.showGrid(x=True, y=True, alpha=0.3)
+        self._p_curr.setLabel("left", "A", color=TEXT_DIM)
+        self._p_curr.setLabel("bottom", "s", color=TEXT_DIM)
+        self._p_curr.addLegend(brush=(17, 24, 39, 180))
+        self._p_curr.showGrid(x=True, y=True, alpha=0.15)
+        self._p_curr.getAxis("bottom").setPen(grid_pen)
+        self._p_curr.getAxis("left").setPen(grid_pen)
         self._curve_iout = self._p_curr.plot(
-            pen=pg.mkPen("#4CAF50", width=2), name="Iout"
+            pen=pg.mkPen(GREEN, width=2), name="Iout"
         )
 
-        # Plot 3: Temperature (Temp only)
+        # Plot 3: Temperature
         self._p_temp = self._graphics.addPlot(
             row=2, col=0, title="Temperature"
         )
-        self._p_temp.setLabel("left", "Temperature", units="\u00b0C")
-        self._p_temp.setLabel("bottom", "Time", units="s")
-        self._p_temp.addLegend()
-        self._p_temp.showGrid(x=True, y=True, alpha=0.3)
+        self._p_temp.setLabel("left", "\u00b0C", color=TEXT_DIM)
+        self._p_temp.setLabel("bottom", "s", color=TEXT_DIM)
+        self._p_temp.addLegend(brush=(17, 24, 39, 180))
+        self._p_temp.showGrid(x=True, y=True, alpha=0.15)
+        self._p_temp.getAxis("bottom").setPen(grid_pen)
+        self._p_temp.getAxis("left").setPen(grid_pen)
         self._curve_temp = self._p_temp.plot(
-            pen=pg.mkPen("r", width=2), name="Temp"
+            pen=pg.mkPen(ORANGE, width=2), name="Temp"
         )
 
-        # Link X axes: current and temp follow voltage's X range
+        # Link X axes
         self._p_curr.setXLink(self._p_volt)
         self._p_temp.setXLink(self._p_volt)
 
         # Redraw timer (~15 Hz)
         self._redraw_timer = QTimer(self)
         self._redraw_timer.timeout.connect(self._redraw)
-        self._redraw_timer.start(66)  # ~15 fps
+        self._redraw_timer.start(66)
 
-    # ---- public API (called from main window via signal) -----------------
+    # ---- public API -------------------------------------------------------
 
     def add_point(self, msg: Message2) -> None:
-        """Append a data point from Message2."""
         t = time.monotonic() - self._t0
         self._ts.append(t)
         self._vout.append(msg.output_voltage)
@@ -145,7 +164,7 @@ class GraphPanel(QGroupBox):
         self._temp.append(msg.temperature)
         self._status.append(msg.status.to_byte())
 
-    # ---- internal --------------------------------------------------------
+    # ---- internal ---------------------------------------------------------
 
     def _redraw(self) -> None:
         if self._paused or len(self._ts) == 0:

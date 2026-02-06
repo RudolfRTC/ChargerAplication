@@ -1,54 +1,74 @@
-"""Telemetry panel: real-time Message2 display with status indicators."""
+"""Telemetry panel: real-time Message2 display with LED pill indicators."""
 
 from __future__ import annotations
 
 import time
-from typing import Optional
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox,
+    QFrame,
     QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
     QLabel,
     QVBoxLayout,
-    QHBoxLayout,
-    QFrame,
 )
 
 from obc_controller.can_protocol import Message2, StatusFlags
+from obc_controller.ui.theme import CYAN, GREEN, RED, TEXT_DIM
 
 
-class _Indicator(QFrame):
-    """Small coloured indicator: green = OK, red = FAULT."""
+class _LedPill(QFrame):
+    """LED pill indicator: green glow = OK, red glow = FAULT."""
+
+    _OK_STYLE = (
+        "QFrame#led_pill {{ background: rgba(0,230,118,0.1); "
+        "border: 1px solid rgba(0,230,118,0.3); border-radius: 12px; }}"
+    )
+    _FAULT_STYLE = (
+        "QFrame#led_pill {{ background: rgba(255,23,68,0.15); "
+        "border: 1px solid rgba(255,23,68,0.4); border-radius: 12px; }}"
+    )
 
     def __init__(self, label_text: str, parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self._dot = QLabel("\u25CF")  # filled circle
-        self._dot.setStyleSheet("color: green; font-size: 14px;")
+        self.setObjectName("led_pill")
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 3, 10, 3)
+        lay.setSpacing(6)
+        self._led = QLabel("\u25cf")
         self._label = QLabel(label_text)
-        layout.addWidget(self._dot)
-        layout.addWidget(self._label)
-        layout.addStretch()
+        self._label.setStyleSheet(f"font-size: 11px; color: {TEXT_DIM};")
+        lay.addWidget(self._led)
+        lay.addWidget(self._label)
+        self.set_ok(True)
 
     def set_ok(self, ok: bool) -> None:
         if ok:
-            self._dot.setStyleSheet("color: green; font-size: 14px;")
+            self._led.setStyleSheet(
+                f"color: {GREEN}; font-size: 16px; background: transparent;"
+            )
+            self.setStyleSheet(self._OK_STYLE)
         else:
-            self._dot.setStyleSheet("color: red; font-size: 14px;")
+            self._led.setStyleSheet(
+                f"color: {RED}; font-size: 16px; background: transparent;"
+            )
+            self.setStyleSheet(self._FAULT_STYLE)
 
 
 class TelemetryPanel(QGroupBox):
     def __init__(self, parent=None):
-        super().__init__("Telemetry (Message2)", parent)
+        super().__init__("Telemetry", parent)
         layout = QVBoxLayout(self)
 
+        # Value grid
         grid = QGridLayout()
-        self._vout_label = QLabel("—")
-        self._iout_label = QLabel("—")
-        self._vin_label = QLabel("—")
-        self._temp_label = QLabel("—")
+        grid.setSpacing(6)
+
+        self._vout_label = QLabel("\u2014")
+        self._iout_label = QLabel("\u2014")
+        self._vin_label = QLabel("\u2014")
+        self._temp_label = QLabel("\u2014")
 
         for lbl in (
             self._vout_label,
@@ -56,26 +76,32 @@ class TelemetryPanel(QGroupBox):
             self._vin_label,
             self._temp_label,
         ):
-            lbl.setStyleSheet("font-size: 16px; font-weight: bold;")
+            lbl.setObjectName("tele_value")
 
-        grid.addWidget(QLabel("Output voltage:"), 0, 0)
-        grid.addWidget(self._vout_label, 0, 1)
-        grid.addWidget(QLabel("Output current:"), 1, 0)
-        grid.addWidget(self._iout_label, 1, 1)
-        grid.addWidget(QLabel("Input voltage:"), 2, 0)
-        grid.addWidget(self._vin_label, 2, 1)
-        grid.addWidget(QLabel("Temperature:"), 3, 0)
-        grid.addWidget(self._temp_label, 3, 1)
+        labels = ["Output V:", "Output A:", "Input V:", "Temp:"]
+        values = [
+            self._vout_label,
+            self._iout_label,
+            self._vin_label,
+            self._temp_label,
+        ]
+        for i, (txt, val) in enumerate(zip(labels, values)):
+            name_lbl = QLabel(txt)
+            name_lbl.setObjectName("tele_label")
+            grid.addWidget(name_lbl, 0, i * 2)
+            grid.addWidget(val, 0, i * 2 + 1)
+
         layout.addLayout(grid)
 
-        # Status flags
-        self._hw_ind = _Indicator("Hardware")
-        self._temp_ind = _Indicator("Temperature")
-        self._vin_ind = _Indicator("Input Voltage")
-        self._start_ind = _Indicator("Starting State")
-        self._comm_ind = _Indicator("Communication")
+        # LED pill status flags
+        self._hw_ind = _LedPill("HW")
+        self._temp_ind = _LedPill("Temp")
+        self._vin_ind = _LedPill("Vin")
+        self._start_ind = _LedPill("Start")
+        self._comm_ind = _LedPill("Comm")
 
-        flags_layout = QHBoxLayout()
+        pill_row = QHBoxLayout()
+        pill_row.setSpacing(6)
         for ind in (
             self._hw_ind,
             self._temp_ind,
@@ -83,16 +109,16 @@ class TelemetryPanel(QGroupBox):
             self._start_ind,
             self._comm_ind,
         ):
-            flags_layout.addWidget(ind)
-        layout.addLayout(flags_layout)
+            pill_row.addWidget(ind)
+        pill_row.addStretch()
+        layout.addLayout(pill_row)
 
         # Last received + alarm
         bottom = QHBoxLayout()
-        self._last_rx_label = QLabel("Last received: —")
+        self._last_rx_label = QLabel("Last RX: \u2014")
+        self._last_rx_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         self._alarm_label = QLabel("")
-        self._alarm_label.setStyleSheet(
-            "color: red; font-weight: bold; font-size: 13px;"
-        )
+        self._alarm_label.setObjectName("alarm_label")
         bottom.addWidget(self._last_rx_label)
         bottom.addStretch()
         bottom.addWidget(self._alarm_label)
@@ -112,7 +138,7 @@ class TelemetryPanel(QGroupBox):
         self._comm_ind.set_ok(not s.communication_timeout)
 
         self._last_rx_label.setText(
-            f"Last received: {time.strftime('%H:%M:%S')}"
+            f"Last RX: {time.strftime('%H:%M:%S')}"
         )
         self._alarm_label.setText("")
 
@@ -126,6 +152,6 @@ class TelemetryPanel(QGroupBox):
             self._vin_label,
             self._temp_label,
         ):
-            lbl.setText("—")
-        self._last_rx_label.setText("Last received: —")
+            lbl.setText("\u2014")
+        self._last_rx_label.setText("Last RX: \u2014")
         self._alarm_label.setText("")
