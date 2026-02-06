@@ -6,6 +6,7 @@ from PySide6.QtCore import Slot
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QMainWindow,
+    QScrollArea,
     QSplitter,
     QTabWidget,
     QVBoxLayout,
@@ -26,7 +27,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("OBC Charger Controller")
-        self.resize(1100, 750)
+        self.resize(1100, 800)
 
         self._worker: CANWorker | None = None
         self._simulator: Simulator | None = None
@@ -49,19 +50,23 @@ class MainWindow(QMainWindow):
         dash_widget = QWidget()
         dash_layout = QHBoxLayout(dash_widget)
 
-        left_col = QVBoxLayout()
+        # Left column in a scroll area (control panel can be tall now)
+        left_inner = QWidget()
+        left_col = QVBoxLayout(left_inner)
         self._ctrl_panel = ControlPanel()
         self._tele_panel = TelemetryPanel()
         left_col.addWidget(self._ctrl_panel)
         left_col.addWidget(self._tele_panel)
         left_col.addStretch()
 
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(left_inner)
+
         self._log_panel = LogPanel()
 
         splitter = QSplitter()
-        left_widget = QWidget()
-        left_widget.setLayout(left_col)
-        splitter.addWidget(left_widget)
+        splitter.addWidget(scroll)
         splitter.addWidget(self._log_panel)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 1)
@@ -77,6 +82,8 @@ class MainWindow(QMainWindow):
         self._conn_panel.connect_requested.connect(self._on_connect)
         self._conn_panel.disconnect_requested.connect(self._on_disconnect)
         self._ctrl_panel.control_changed.connect(self._on_control_changed)
+        self._ctrl_panel.profile_loaded.connect(self._on_profile_loaded)
+        self._ctrl_panel.log_message.connect(self._log_panel.append)
 
     # ---- connection management -------------------------------------------
 
@@ -100,12 +107,16 @@ class MainWindow(QMainWindow):
         self._worker = CANWorker()
         self._worker.set_connection_params(interface, channel, bitrate)
 
-        # Apply initial setpoints
+        # Apply initial setpoints + ramp config
         self._worker.set_setpoints(
             self._ctrl_panel.get_voltage(),
             self._ctrl_panel.get_current(),
         )
         self._worker.set_control(self._ctrl_panel.get_control())
+        ramp_v, ramp_a = self._ctrl_panel.get_ramp_rates()
+        self._worker.set_ramp_config(
+            self._ctrl_panel.get_ramp_enabled(), ramp_v, ramp_a
+        )
         self._worker.enable_tx(True)
 
         # Wire worker signals
@@ -116,6 +127,7 @@ class MainWindow(QMainWindow):
         self._worker.message2_received.connect(self._on_message2)
         self._worker.timeout_alarm.connect(self._on_timeout_alarm)
         self._worker.tx_message.connect(self._on_tx_message)
+        self._worker.ramp_state.connect(self._on_ramp_state)
 
         self._worker.start()
 
@@ -149,6 +161,7 @@ class MainWindow(QMainWindow):
         self._conn_panel.set_connected(False)
         self._ctrl_panel.setEnabled(False)
         self._tele_panel.clear()
+        self._ctrl_panel.update_ramp_display(False, 0, 0)
 
     @Slot(str)
     def _on_worker_error(self, msg: str) -> None:
@@ -171,15 +184,34 @@ class MainWindow(QMainWindow):
             f"ctrl={msg.control.name}"
         )
 
+    @Slot(bool, float, float)
+    def _on_ramp_state(
+        self, active: bool, ramped_v: float, ramped_a: float
+    ) -> None:
+        self._ctrl_panel.update_ramp_display(active, ramped_v, ramped_a)
+
     # ---- control panel -> worker -----------------------------------------
 
-    @Slot(float, float, int)
+    @Slot(float, float, int, bool, float, float)
     def _on_control_changed(
-        self, voltage: float, current: float, control: int
+        self,
+        voltage: float,
+        current: float,
+        control: int,
+        ramp_enabled: bool,
+        ramp_v: float,
+        ramp_a: float,
     ) -> None:
         if self._worker is not None:
             self._worker.set_setpoints(voltage, current)
             self._worker.set_control(ChargerControl(control))
+            self._worker.set_ramp_config(ramp_enabled, ramp_v, ramp_a)
+
+    @Slot(object)
+    def _on_profile_loaded(self, profile) -> None:
+        """Reset ramp when a profile is loaded."""
+        if self._worker is not None:
+            self._worker.reset_ramp()
 
     # ---- window close ----------------------------------------------------
 
