@@ -1,8 +1,9 @@
 """Real-time graph panel using pyqtgraph.
 
-Two sub-plots:
+Three separate sub-plots with linked X axes:
   1. Voltage: Vout and Vin (V)
-  2. Current & Temperature: Iout (A, left axis) and Temperature (C, right axis)
+  2. Current: Iout (A)
+  3. Temperature: Temp (deg C)
 
 Data is appended from the CAN thread; a Qt timer redraws at ~15 Hz so the UI
 stays responsive regardless of CAN message rate.
@@ -13,7 +14,6 @@ from __future__ import annotations
 import csv
 import time
 from collections import deque
-from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -23,9 +23,9 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QVBoxLayout,
-    QLabel,
 )
 
 from obc_controller.can_protocol import Message2
@@ -48,18 +48,18 @@ class GraphPanel(QGroupBox):
 
         # Ring buffers (store up to 30 min @ 2 Hz = 3600 points max)
         maxlen = 3600
-        self._ts = deque(maxlen=maxlen)
-        self._vout = deque(maxlen=maxlen)
-        self._vin = deque(maxlen=maxlen)
-        self._iout = deque(maxlen=maxlen)
-        self._temp = deque(maxlen=maxlen)
-        self._status = deque(maxlen=maxlen)
+        self._ts: deque[float] = deque(maxlen=maxlen)
+        self._vout: deque[float] = deque(maxlen=maxlen)
+        self._vin: deque[float] = deque(maxlen=maxlen)
+        self._iout: deque[float] = deque(maxlen=maxlen)
+        self._temp: deque[float] = deque(maxlen=maxlen)
+        self._status: deque[int] = deque(maxlen=maxlen)
 
         self._window_sec = 600  # default 10 min
 
         layout = QVBoxLayout(self)
 
-        # --- controls ---
+        # --- controls row ---
         ctrl_row = QHBoxLayout()
         self._pause_btn = QPushButton("Pause")
         self._pause_btn.setCheckable(True)
@@ -84,57 +84,59 @@ class GraphPanel(QGroupBox):
         ctrl_row.addStretch()
         layout.addLayout(ctrl_row)
 
-        # --- pyqtgraph widget ---
+        # --- pyqtgraph widget with 3 rows ---
         pg.setConfigOptions(antialias=True)
         self._graphics = pg.GraphicsLayoutWidget()
         layout.addWidget(self._graphics)
 
-        # Plot 1: Voltage
-        self._p1 = self._graphics.addPlot(row=0, col=0, title="Voltage")
-        self._p1.setLabel("left", "Voltage", units="V")
-        self._p1.setLabel("bottom", "Time", units="s")
-        self._p1.addLegend()
-        self._p1.showGrid(x=True, y=True, alpha=0.3)
-        self._curve_vout = self._p1.plot(
+        # Plot 1: Voltage (Vout + Vin)
+        self._p_volt = self._graphics.addPlot(row=0, col=0, title="Voltage")
+        self._p_volt.setLabel("left", "Voltage", units="V")
+        self._p_volt.setLabel("bottom", "Time", units="s")
+        self._p_volt.addLegend()
+        self._p_volt.showGrid(x=True, y=True, alpha=0.3)
+        self._curve_vout = self._p_volt.plot(
             pen=pg.mkPen("y", width=2), name="Vout"
         )
-        self._curve_vin = self._p1.plot(
+        self._curve_vin = self._p_volt.plot(
             pen=pg.mkPen("c", width=2), name="Vin"
         )
 
-        # Plot 2: Current + Temperature
-        self._p2 = self._graphics.addPlot(row=1, col=0, title="Current & Temp")
-        self._p2.setLabel("left", "Current", units="A")
-        self._p2.setLabel("bottom", "Time", units="s")
-        self._p2.addLegend()
-        self._p2.showGrid(x=True, y=True, alpha=0.3)
-        self._curve_iout = self._p2.plot(
+        # Plot 2: Current (Iout only)
+        self._p_curr = self._graphics.addPlot(row=1, col=0, title="Current")
+        self._p_curr.setLabel("left", "Current", units="A")
+        self._p_curr.setLabel("bottom", "Time", units="s")
+        self._p_curr.addLegend()
+        self._p_curr.showGrid(x=True, y=True, alpha=0.3)
+        self._curve_iout = self._p_curr.plot(
             pen=pg.mkPen("#4CAF50", width=2), name="Iout"
         )
 
-        # Second Y axis for temperature
-        self._p2_temp = pg.ViewBox()
-        self._p2.scene().addItem(self._p2_temp)
-        self._p2.getAxis("right").linkToView(self._p2_temp)
-        self._p2_temp.setXLink(self._p2)
-        self._p2.setLabel("right", "Temperature", units="\u00b0C")
-        self._p2.getAxis("right").show()
-        self._curve_temp = pg.PlotCurveItem(
+        # Plot 3: Temperature (Temp only)
+        self._p_temp = self._graphics.addPlot(
+            row=2, col=0, title="Temperature"
+        )
+        self._p_temp.setLabel("left", "Temperature", units="\u00b0C")
+        self._p_temp.setLabel("bottom", "Time", units="s")
+        self._p_temp.addLegend()
+        self._p_temp.showGrid(x=True, y=True, alpha=0.3)
+        self._curve_temp = self._p_temp.plot(
             pen=pg.mkPen("r", width=2), name="Temp"
         )
-        self._p2_temp.addItem(self._curve_temp)
-        # Keep temp ViewBox synced
-        self._p2.getViewBox().sigResized.connect(self._sync_temp_viewbox)
+
+        # Link X axes: current and temp follow voltage's X range
+        self._p_curr.setXLink(self._p_volt)
+        self._p_temp.setXLink(self._p_volt)
 
         # Redraw timer (~15 Hz)
         self._redraw_timer = QTimer(self)
         self._redraw_timer.timeout.connect(self._redraw)
         self._redraw_timer.start(66)  # ~15 fps
 
-    # ---- public API (called from main window) ----------------------------
+    # ---- public API (called from main window via signal) -----------------
 
     def add_point(self, msg: Message2) -> None:
-        """Append a data point from Message2 (called from any thread via signal)."""
+        """Append a data point from Message2."""
         t = time.monotonic() - self._t0
         self._ts.append(t)
         self._vout.append(msg.output_voltage)
@@ -158,10 +160,6 @@ class GraphPanel(QGroupBox):
         self._curve_vin.setData(t, np.array(self._vin)[mask])
         self._curve_iout.setData(t, np.array(self._iout)[mask])
         self._curve_temp.setData(t, np.array(self._temp)[mask])
-
-    def _sync_temp_viewbox(self) -> None:
-        self._p2_temp.setGeometry(self._p2.getViewBox().sceneBoundingRect())
-        self._p2_temp.linkedViewChanged(self._p2.getViewBox(), self._p2_temp.XAxis)
 
     def _on_pause_toggled(self, checked: bool) -> None:
         self._paused = checked
