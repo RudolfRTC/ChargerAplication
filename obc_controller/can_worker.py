@@ -174,7 +174,7 @@ class CANWorker(QThread):
         self._ramp_rate_a: float = 0.5   # A/s
         self._ramp_reset_flag: bool = False
 
-        # Connection parameters
+        # Connection parameters (set before start, protected by mutex)
         self._interface = "pcan"
         self._channel = "PCAN_USBBUS1"
         self._bitrate = 250000
@@ -189,9 +189,10 @@ class CANWorker(QThread):
     def set_connection_params(
         self, interface: str, channel: str, bitrate: int
     ) -> None:
-        self._interface = interface
-        self._channel = channel
-        self._bitrate = bitrate
+        with QMutexLocker(self._mutex):
+            self._interface = interface
+            self._channel = channel
+            self._bitrate = bitrate
 
     def set_setpoints(self, voltage: float, current: float) -> None:
         with QMutexLocker(self._mutex):
@@ -220,29 +221,34 @@ class CANWorker(QThread):
             self._tx_enabled = enabled
 
     def request_stop(self) -> None:
-        self._running = False
+        with QMutexLocker(self._mutex):
+            self._running = False
 
     # ---- thread entry point ----------------------------------------------
 
     def run(self) -> None:  # noqa: C901
         # --- connect ---
+        with QMutexLocker(self._mutex):
+            iface = self._interface
+            chan = self._channel
+            brate = self._bitrate
         try:
             kwargs: dict = {
-                "interface": self._interface,
-                "channel": self._channel,
-                "bitrate": self._bitrate,
+                "interface": iface,
+                "channel": chan,
+                "bitrate": brate,
             }
-            if self._interface == "pcan":
+            if iface == "pcan":
                 self.log_message.emit(
-                    f"Connecting PCAN channel={self._channel} "
-                    f"bitrate={self._bitrate} \u2026"
+                    f"Connecting PCAN channel={chan} "
+                    f"bitrate={brate} \u2026"
                 )
             self._bus = can.Bus(**kwargs)
             self.log_message.emit("CAN bus connected.")
             self.connected.emit()
         except Exception as exc:
             msg = f"CAN connect failed: {exc}"
-            if self._interface == "pcan" and "bitrate" in str(exc).lower():
+            if iface == "pcan" and "bitrate" in str(exc).lower():
                 msg += (
                     "\nNote: Bitrate is configured in PCAN driver / PCAN-View."
                 )
@@ -251,10 +257,16 @@ class CANWorker(QThread):
             self.disconnected.emit()
             return
 
-        self._running = True
+        with QMutexLocker(self._mutex):
+            self._running = True
         last_tx_time = 0.0
         last_rx_time = time.monotonic()
         alarm_active = False
+
+        # Reset health tracking for fresh connection
+        self._tx_times.clear()
+        self._rx_times.clear()
+        self._prev_status_byte = None
 
         # Ramp internal state
         ramped_v = 0.0
@@ -262,11 +274,13 @@ class CANWorker(QThread):
         prev_control = ChargerControl.STOP_OUTPUTTING
 
         try:
-            while self._running:
+            while True:
                 now = time.monotonic()
 
                 # ---- read UI state under lock ----------------------------
                 with QMutexLocker(self._mutex):
+                    if not self._running:
+                        break
                     tx_en = self._tx_enabled
                     ctrl = self._control
                     tgt_v = self._target_voltage
@@ -429,3 +443,14 @@ class CANWorker(QThread):
                 pass
             self._bus = None
             self.log_message.emit("CAN bus closed.")
+
+    def get_bus(self) -> Optional[can.Bus]:
+        """Return the underlying CAN bus object (or None if not connected).
+
+        Used by BaudrateSwitchWorker to send frames on the same bus.
+        """
+        return self._bus
+
+    def is_bus_connected(self) -> bool:
+        """Return True if the CAN bus is currently open."""
+        return self._bus is not None

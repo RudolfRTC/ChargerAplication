@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import random
+import threading
 import time
 
 from PySide6.QtCore import QThread, Signal
@@ -28,16 +29,22 @@ class Simulator(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running = False
+        self._lock = threading.Lock()
 
     def request_stop(self) -> None:
-        self._running = False
+        with self._lock:
+            self._running = False
 
     def run(self) -> None:
-        self._running = True
+        with self._lock:
+            self._running = True
         self.log_message.emit("Simulator started (500 ms cycle).")
         t0 = time.monotonic()
 
-        while self._running:
+        while True:
+            with self._lock:
+                if not self._running:
+                    break
             elapsed = time.monotonic() - t0
 
             # Generate slowly varying values

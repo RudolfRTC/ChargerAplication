@@ -416,7 +416,7 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_baudrate_switch(self) -> None:
-        if self._worker is None or self._worker._bus is None:
+        if self._worker is None or not self._worker.is_bus_connected():
             self._log_panel.append(
                 "Cannot switch baudrate: CAN not connected."
             )
@@ -431,7 +431,7 @@ class MainWindow(QMainWindow):
         self._ctrl_panel.setEnabled(False)
         self._graph_panel.add_event_marker("Baud switch START", "info")
 
-        self._baud_worker = BaudrateSwitchWorker(self._worker._bus)
+        self._baud_worker = BaudrateSwitchWorker(self._worker.get_bus())
         self._baud_worker.progress.connect(self._on_baud_progress)
         self._baud_worker.finished_ok.connect(self._on_baud_done)
         self._baud_worker.error.connect(self._on_baud_error)

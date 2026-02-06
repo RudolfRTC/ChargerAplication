@@ -66,10 +66,17 @@ class Message1:
         if len(data) < 5:
             raise ValueError(f"Message1 requires >= 5 bytes, got {len(data)}")
         v_raw, i_raw, ctrl = struct.unpack_from(">HHB", data, 0)
+        try:
+            control = ChargerControl(ctrl)
+        except ValueError:
+            raise ValueError(
+                f"Unknown ChargerControl value: {ctrl} "
+                f"(expected 0, 1, or 2)"
+            )
         return cls(
             voltage_setpoint=v_raw / 10.0,
             current_setpoint=i_raw / 10.0,
-            control=ChargerControl(ctrl),
+            control=control,
         )
 
 

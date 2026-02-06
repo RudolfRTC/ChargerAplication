@@ -211,3 +211,12 @@ class TelemetryPanel(QGroupBox):
         self._actual_v = None
         self._actual_a = None
         self._update_sp_display()
+        # Reset LED indicators to OK state
+        for ind in (
+            self._hw_ind,
+            self._temp_ind,
+            self._vin_ind,
+            self._start_ind,
+            self._comm_ind,
+        ):
+            ind.set_ok(True)
