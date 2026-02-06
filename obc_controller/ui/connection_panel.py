@@ -148,7 +148,9 @@ class ConnectionPanel(QGroupBox):
         self._channel_edit.setEnabled(not connected)
         self._bitrate_combo.setEnabled(not connected)
         self._sim_check.setEnabled(not connected)
-        self._baud_switch_btn.setEnabled(connected)
+        # Baudrate switch only makes sense with real CAN hardware
+        is_sim = self._sim_check.isChecked()
+        self._baud_switch_btn.setEnabled(connected and not is_sim)
         if connected:
             self._status_label.setText("\u25cf  Connected")
             self._status_label.setObjectName("status_connected")

@@ -82,6 +82,7 @@ class GraphPanel(QGroupBox):
         self._status: deque[int] = deque(maxlen=maxlen)
 
         self._window_sec = 600  # default 10 min
+        self._data_dirty = False  # flag to avoid redundant np.array() calls
 
         # Event markers: [(timestamp, label, severity, [lines], text_item)]
         self._markers: list[tuple] = []
@@ -183,6 +184,7 @@ class GraphPanel(QGroupBox):
         self._iout.append(msg.output_current)
         self._temp.append(msg.temperature)
         self._status.append(msg.status.to_byte())
+        self._data_dirty = True
 
     def add_event_marker(
         self, label: str, severity: str = "info"
@@ -217,15 +219,32 @@ class GraphPanel(QGroupBox):
         if self._paused or len(self._ts) == 0:
             return
 
+        if not self._data_dirty:
+            return
+        self._data_dirty = False
+
         ts = np.array(self._ts)
         now = ts[-1]
-        mask = ts >= (now - self._window_sec)
+        cutoff = now - self._window_sec
+        mask = ts >= cutoff
 
         t = ts[mask]
         self._curve_vout.setData(t, np.array(self._vout)[mask])
         self._curve_vin.setData(t, np.array(self._vin)[mask])
         self._curve_iout.setData(t, np.array(self._iout)[mask])
         self._curve_temp.setData(t, np.array(self._temp)[mask])
+
+        # Remove markers that have scrolled out of the visible window
+        still_visible: list[tuple] = []
+        for marker in self._markers:
+            m_t, _, _, lines, text_item = marker
+            if m_t < cutoff:
+                for plot, line in zip(self._plots, lines):
+                    plot.removeItem(line)
+                self._p_volt.removeItem(text_item)
+            else:
+                still_visible.append(marker)
+        self._markers = still_visible
 
         # Reposition marker labels near top of voltage plot
         if self._markers:
@@ -240,6 +259,7 @@ class GraphPanel(QGroupBox):
 
     def _on_window_changed(self, text: str) -> None:
         self._window_sec = WINDOW_OPTIONS.get(text, 600)
+        self._data_dirty = True
 
     def _clear_data(self) -> None:
         self._ts.clear()
