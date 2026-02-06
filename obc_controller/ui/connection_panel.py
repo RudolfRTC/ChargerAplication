@@ -1,4 +1,5 @@
-"""Connection panel: backend, channel, bitrate, connect/disconnect."""
+"""Connection panel: backend, channel, bitrate, connect/disconnect,
+baudrate switch, and CAN health monitor."""
 
 from __future__ import annotations
 
@@ -13,6 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QVBoxLayout,
 )
+
+from obc_controller.ui.theme import GREEN, RED, TEXT_DIM
 
 
 class ConnectionPanel(QGroupBox):
@@ -82,11 +85,40 @@ class ConnectionPanel(QGroupBox):
         self._baud_status.setObjectName("baud_status")
         layout.addWidget(self._baud_status)
 
-        # Signals
+        # ---- Health panel ----
+        health_group = QGroupBox("Health")
+        health_lay = QVBoxLayout(health_group)
+        health_lay.setSpacing(4)
+
+        _mono = (
+            "font-family: 'Cascadia Code','Fira Code','Consolas',monospace; "
+            f"font-size: 12px; color: {TEXT_DIM};"
+        )
+        self._tx_rate_lbl = QLabel("TX: \u2014 /s")
+        self._rx_rate_lbl = QLabel("RX: \u2014 /s")
+        self._rx_age_lbl = QLabel("Last RX: \u2014 s")
+        self._comm_lbl = QLabel("Comm: \u2014")
+        self._bitrate_lbl = QLabel("Bitrate: \u2014")
+
+        for lbl in (
+            self._tx_rate_lbl,
+            self._rx_rate_lbl,
+            self._rx_age_lbl,
+            self._comm_lbl,
+            self._bitrate_lbl,
+        ):
+            lbl.setStyleSheet(_mono)
+            health_lay.addWidget(lbl)
+
+        layout.addWidget(health_group)
+
+        # ---- Signals ----
         self._connect_btn.clicked.connect(self._on_connect)
         self._disconnect_btn.clicked.connect(self._on_disconnect)
         self._baud_switch_btn.clicked.connect(self._on_baud_switch)
-        self._backend_combo.currentTextChanged.connect(self._on_backend_changed)
+        self._backend_combo.currentTextChanged.connect(
+            self._on_backend_changed
+        )
 
     def _on_backend_changed(self, text: str) -> None:
         if text == "pcan":
@@ -107,6 +139,8 @@ class ConnectionPanel(QGroupBox):
     def _on_baud_switch(self) -> None:
         self.baudrate_switch_requested.emit()
 
+    # ---- public state setters ----
+
     def set_connected(self, connected: bool) -> None:
         self._connect_btn.setEnabled(not connected)
         self._disconnect_btn.setEnabled(connected)
@@ -118,13 +152,50 @@ class ConnectionPanel(QGroupBox):
         if connected:
             self._status_label.setText("\u25cf  Connected")
             self._status_label.setObjectName("status_connected")
+            bitrate = int(self._bitrate_combo.currentText())
+            self._bitrate_lbl.setText(f"Bitrate: {bitrate // 1000}k")
         else:
             self._status_label.setText("\u25cb  Disconnected")
             self._status_label.setObjectName("status_disconnected")
+            self._reset_health()
         # Force style recalculation after objectName change
         self._status_label.style().unpolish(self._status_label)
         self._status_label.style().polish(self._status_label)
         self._baud_status.setText("")
+
+    def update_health(
+        self, tx_rate: float, rx_rate: float, last_rx_age: float
+    ) -> None:
+        """Update the health panel with live CAN bus stats."""
+        self._tx_rate_lbl.setText(f"TX: {tx_rate:.1f} /s")
+        self._rx_rate_lbl.setText(f"RX: {rx_rate:.1f} /s")
+        self._rx_age_lbl.setText(f"Last RX: {last_rx_age:.1f} s")
+        if last_rx_age > 5.0:
+            self._comm_lbl.setText("Comm: TIMEOUT")
+            self._comm_lbl.setStyleSheet(
+                f"color: {RED}; font-weight: bold; "
+                "font-family: 'Cascadia Code','Fira Code','Consolas',monospace; "
+                "font-size: 12px;"
+            )
+        else:
+            self._comm_lbl.setText("Comm: OK")
+            self._comm_lbl.setStyleSheet(
+                f"color: {GREEN}; font-weight: bold; "
+                "font-family: 'Cascadia Code','Fira Code','Consolas',monospace; "
+                "font-size: 12px;"
+            )
+
+    def _reset_health(self) -> None:
+        _mono = (
+            "font-family: 'Cascadia Code','Fira Code','Consolas',monospace; "
+            f"font-size: 12px; color: {TEXT_DIM};"
+        )
+        self._tx_rate_lbl.setText("TX: \u2014 /s")
+        self._rx_rate_lbl.setText("RX: \u2014 /s")
+        self._rx_age_lbl.setText("Last RX: \u2014 s")
+        self._comm_lbl.setText("Comm: \u2014")
+        self._comm_lbl.setStyleSheet(_mono)
+        self._bitrate_lbl.setText("Bitrate: \u2014")
 
     def set_baud_switch_busy(self, busy: bool) -> None:
         self._baud_switch_btn.setEnabled(not busy)

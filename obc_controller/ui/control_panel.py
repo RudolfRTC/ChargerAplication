@@ -1,15 +1,17 @@
 """Control panel: voltage/current setpoints, start/stop/heating buttons,
-profile management, and ramp (soft-start) settings."""
+profile management, ramp (soft-start), mode badge, and instant preset
+with confirmation dialog."""
 
 from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -26,6 +28,17 @@ from obc_controller.profiles import (
     load_profiles,
     save_profile,
 )
+from obc_controller.settings import load_settings, save_setting
+from obc_controller.ui.theme import CYAN, GREEN, ORANGE, RED, VIOLET
+
+
+# Badge colour configs: (border/text colour, bg_start rgba, bg_end rgba)
+_BADGE = {
+    "stop": (RED, "rgba(255,23,68,0.25)", "rgba(255,23,68,0.08)"),
+    "charging": (GREEN, "rgba(0,230,118,0.25)", "rgba(0,230,118,0.08)"),
+    "heating": (ORANGE, "rgba(255,145,0,0.25)", "rgba(255,145,0,0.08)"),
+    "instant": (VIOLET, "rgba(124,77,255,0.30)", "rgba(124,77,255,0.10)"),
+}
 
 
 class ControlPanel(QGroupBox):
@@ -41,6 +54,17 @@ class ControlPanel(QGroupBox):
 
         layout = QVBoxLayout(self)
         layout.setSpacing(8)
+
+        # ---- Large MODE badge ----
+        self._mode_badge = QFrame()
+        self._mode_badge.setFixedHeight(46)
+        badge_lay = QHBoxLayout(self._mode_badge)
+        badge_lay.setContentsMargins(0, 0, 0, 0)
+        self._mode_badge_label = QLabel("STOP")
+        self._mode_badge_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        badge_lay.addWidget(self._mode_badge_label)
+        layout.addWidget(self._mode_badge)
+        self._update_badge("STOP", "stop")
 
         # ---- Profiles section ----
         prof_group = QGroupBox("Profiles")
@@ -101,10 +125,6 @@ class ControlPanel(QGroupBox):
         layout.addWidget(self._start_btn)
         layout.addWidget(self._stop_btn)
         layout.addWidget(self._heat_btn)
-
-        self._mode_label = QLabel("Mode: STOP")
-        self._mode_label.setObjectName("mode_label")
-        layout.addWidget(self._mode_label)
 
         # ---- Instant preset ----
         self._instant_btn = QPushButton("\u26a1 360V / 9A Instant")
@@ -180,14 +200,54 @@ class ControlPanel(QGroupBox):
         self._refresh_profiles()
         self.setEnabled(False)
 
+    # ---- Mode badge ----
+
+    def _update_badge(self, text: str, style_key: str) -> None:
+        color, bg_start, bg_end = _BADGE.get(
+            style_key, _BADGE["stop"]
+        )
+        self._mode_badge_label.setText(text)
+        self._mode_badge.setStyleSheet(
+            f"QFrame {{ background: qlineargradient(x1:0,y1:0,x2:0,y2:1, "
+            f"stop:0 {bg_start}, stop:1 {bg_end}); "
+            f"border: 2px solid {color}; border-radius: 10px; }}"
+        )
+        self._mode_badge_label.setStyleSheet(
+            f"color: {color}; font-size: 18px; font-weight: bold; "
+            f"letter-spacing: 3px; background: transparent;"
+        )
+
     # ---- Instant 360V / 9A preset ----
 
     def _on_instant_360v(self) -> None:
+        # Confirmation dialog (unless user opted out)
+        settings = load_settings()
+        if not settings.get("skip_instant_confirm", False):
+            dlg = QMessageBox(self)
+            dlg.setWindowTitle("Confirm Instant Preset")
+            dlg.setText(
+                "This will immediately set 360 V / 9 A "
+                "in HEATING/DC mode.\nContinue?"
+            )
+            dlg.setStandardButtons(
+                QMessageBox.StandardButton.Yes
+                | QMessageBox.StandardButton.Cancel
+            )
+            dlg.setDefaultButton(QMessageBox.StandardButton.Cancel)
+            cb = QCheckBox("Don\u2019t ask again")
+            dlg.setCheckBox(cb)
+            result = dlg.exec()
+            if result != QMessageBox.StandardButton.Yes:
+                return
+            if cb.isChecked():
+                save_setting("skip_instant_confirm", True)
+
         self._voltage_spin.setValue(360.0)
         self._current_spin.setValue(9.0)
         self._ramp_check.setChecked(False)
         self._set_control(ChargerControl.HEATING_DC_SUPPLY)
-        self._mode_label.setText("Mode: 360V / 9A INSTANT")
+        # Override badge to violet "instant" style
+        self._update_badge("\u26a1 360V / 9A", "instant")
         self.instant_360v_requested.emit()
         self.log_message.emit(
             "Instant preset: 360V / 9A, ramp OFF, Heating/DC Supply mode"
@@ -282,12 +342,13 @@ class ControlPanel(QGroupBox):
 
     def _set_control(self, ctrl: ChargerControl) -> None:
         self._current_control = ctrl
-        labels = {
-            ChargerControl.START_CHARGING: "Mode: CHARGING",
-            ChargerControl.STOP_OUTPUTTING: "Mode: STOP",
-            ChargerControl.HEATING_DC_SUPPLY: "Mode: HEATING / DC SUPPLY",
+        badge_map = {
+            ChargerControl.STOP_OUTPUTTING: ("STOP", "stop"),
+            ChargerControl.START_CHARGING: ("CHARGING", "charging"),
+            ChargerControl.HEATING_DC_SUPPLY: ("HEATING / DC", "heating"),
         }
-        self._mode_label.setText(labels.get(ctrl, "Mode: ?"))
+        text, style_key = badge_map.get(ctrl, ("?", "stop"))
+        self._update_badge(text, style_key)
         self._emit_state()
 
     def _emit_state(self) -> None:

@@ -36,13 +36,14 @@ _ASSETS = Path(__file__).parent / "assets"
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle(f"OBC Charger Controller — {COMPANY}")
+        self.setWindowTitle(f"OBC Charger Controller \u2014 {COMPANY}")
         self.resize(1280, 860)
 
         self._worker: CANWorker | None = None
         self._simulator: Simulator | None = None
         self._baud_worker: BaudrateSwitchWorker | None = None
         self._sim_mode = False
+        self._prev_control = ChargerControl.STOP_OUTPUTTING
 
         # --- central widget ---
         central = QWidget()
@@ -73,13 +74,15 @@ class MainWindow(QMainWindow):
         title_col.setSpacing(0)
         title_lbl = QLabel("OBC CHARGER CONTROLLER")
         title_lbl.setObjectName("header_title")
-        subtitle_lbl = QLabel(f"{COMPANY}  ·  {ADDRESS}")
+        subtitle_lbl = QLabel(f"{COMPANY}  \u00b7  {ADDRESS}")
         subtitle_lbl.setObjectName("header_subtitle")
         title_col.addWidget(title_lbl)
         title_col.addWidget(subtitle_lbl)
         h_lay.addLayout(title_col, stretch=1)
 
-        about_btn_lbl = QLabel(f"<a style='color:{CYAN};' href='#'>About</a>")
+        about_btn_lbl = QLabel(
+            f"<a style='color:{CYAN};' href='#'>About</a>"
+        )
         about_btn_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         about_btn_lbl.linkActivated.connect(self._show_about)
         h_lay.addWidget(about_btn_lbl)
@@ -156,7 +159,7 @@ class MainWindow(QMainWindow):
         footer.setFixedHeight(28)
         f_lay = QHBoxLayout(footer)
         f_lay.setContentsMargins(12, 0, 12, 0)
-        f_left = QLabel(f"{MADE_BY}  ·  {COMPANY}, {ADDRESS}")
+        f_left = QLabel(f"{MADE_BY}  \u00b7  {COMPANY}, {ADDRESS}")
         f_left.setObjectName("footer_text")
         f_right = QLabel(f"v{__version__}")
         f_right.setObjectName("footer_text")
@@ -239,6 +242,11 @@ class MainWindow(QMainWindow):
             self._simulator.start()
             self._conn_panel.set_connected(True)
             self._ctrl_panel.setEnabled(True)
+            # Set initial setpoints in telemetry for sim mode
+            self._tele_panel.update_setpoints(
+                self._ctrl_panel.get_voltage(),
+                self._ctrl_panel.get_current(),
+            )
             return
 
         # Real CAN connection
@@ -266,6 +274,8 @@ class MainWindow(QMainWindow):
         self._worker.timeout_alarm.connect(self._on_timeout_alarm)
         self._worker.tx_message.connect(self._on_tx_message)
         self._worker.ramp_state.connect(self._on_ramp_state)
+        self._worker.health_stats.connect(self._on_health_stats)
+        self._worker.status_bit_changed.connect(self._on_status_bit_changed)
 
         self._worker.start()
 
@@ -321,12 +331,33 @@ class MainWindow(QMainWindow):
             f"I={msg.current_setpoint:.1f}A "
             f"ctrl={msg.control.name}"
         )
+        # Feed SET values to telemetry (ramped or target, whichever is sent)
+        self._tele_panel.update_setpoints(
+            msg.voltage_setpoint, msg.current_setpoint
+        )
 
     @Slot(bool, float, float)
     def _on_ramp_state(
         self, active: bool, ramped_v: float, ramped_a: float
     ) -> None:
         self._ctrl_panel.update_ramp_display(active, ramped_v, ramped_a)
+
+    @Slot(float, float, float)
+    def _on_health_stats(
+        self, tx_rate: float, rx_rate: float, last_rx_age: float
+    ) -> None:
+        self._conn_panel.update_health(tx_rate, rx_rate, last_rx_age)
+
+    @Slot(int, str, bool)
+    def _on_status_bit_changed(
+        self, bit: int, name: str, is_fault: bool
+    ) -> None:
+        state = "ON" if is_fault else "OFF"
+        severity = "error" if is_fault else "info"
+        self._graph_panel.add_event_marker(
+            f"FAULT {name} {state}", severity
+        )
+        self._log_panel.append(f"Status bit {bit} ({name}): {state}")
 
     # ---- control panel -> worker -----------------------------------------
 
@@ -340,9 +371,25 @@ class MainWindow(QMainWindow):
         ramp_v: float,
         ramp_a: float,
     ) -> None:
+        ctrl = ChargerControl(control)
+
+        # Detect mode change → add graph marker
+        if ctrl != self._prev_control:
+            label = {
+                ChargerControl.STOP_OUTPUTTING: "STOP",
+                ChargerControl.START_CHARGING: "START CHARGING",
+                ChargerControl.HEATING_DC_SUPPLY: "HEATING/DC",
+            }.get(ctrl, "?")
+            self._graph_panel.add_event_marker(f"Mode: {label}", "info")
+            self._prev_control = ctrl
+
+        # Update telemetry setpoints in sim mode (no tx_message signal)
+        if self._sim_mode:
+            self._tele_panel.update_setpoints(voltage, current)
+
         if self._worker is not None:
             self._worker.set_setpoints(voltage, current)
-            self._worker.set_control(ChargerControl(control))
+            self._worker.set_control(ctrl)
             self._worker.set_ramp_config(ramp_enabled, ramp_v, ramp_a)
 
     @Slot(object)
@@ -356,6 +403,9 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_instant_360v(self) -> None:
         """Apply 360V/9A instant preset to the worker."""
+        self._graph_panel.add_event_marker(
+            "\u26a1 360V/9A INSTANT", "warning"
+        )
         if self._worker is not None:
             self._worker.set_setpoints(360.0, 9.0)
             self._worker.set_control(ChargerControl.HEATING_DC_SUPPLY)
@@ -379,6 +429,7 @@ class MainWindow(QMainWindow):
 
         self._conn_panel.set_baud_switch_busy(True)
         self._ctrl_panel.setEnabled(False)
+        self._graph_panel.add_event_marker("Baud switch START", "info")
 
         self._baud_worker = BaudrateSwitchWorker(self._worker._bus)
         self._baud_worker.progress.connect(self._on_baud_progress)
@@ -396,6 +447,7 @@ class MainWindow(QMainWindow):
         self._conn_panel.set_baud_switch_done()
         self._ctrl_panel.setEnabled(True)
         self._baud_worker = None
+        self._graph_panel.add_event_marker("Baud switch DONE", "info")
 
     @Slot(str)
     def _on_baud_error(self, msg: str) -> None:
