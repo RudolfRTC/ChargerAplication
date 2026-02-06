@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from obc_controller.can_protocol import ChargerControl
-from obc_controller.can_worker import CANWorker
+from obc_controller.can_worker import BaudrateSwitchWorker, CANWorker
 from obc_controller.simulator import Simulator
 from obc_controller.ui.connection_panel import ConnectionPanel
 from obc_controller.ui.control_panel import ControlPanel
@@ -31,6 +31,7 @@ class MainWindow(QMainWindow):
 
         self._worker: CANWorker | None = None
         self._simulator: Simulator | None = None
+        self._baud_worker: BaudrateSwitchWorker | None = None
         self._sim_mode = False
 
         # --- build UI ---
@@ -81,7 +82,13 @@ class MainWindow(QMainWindow):
         # --- wire signals ---
         self._conn_panel.connect_requested.connect(self._on_connect)
         self._conn_panel.disconnect_requested.connect(self._on_disconnect)
+        self._conn_panel.baudrate_switch_requested.connect(
+            self._on_baudrate_switch
+        )
         self._ctrl_panel.control_changed.connect(self._on_control_changed)
+        self._ctrl_panel.instant_360v_requested.connect(
+            self._on_instant_360v
+        )
         self._ctrl_panel.profile_loaded.connect(self._on_profile_loaded)
         self._ctrl_panel.log_message.connect(self._log_panel.append)
 
@@ -213,8 +220,66 @@ class MainWindow(QMainWindow):
         if self._worker is not None:
             self._worker.reset_ramp()
 
+    # ---- instant 360V / 9A -----------------------------------------------
+
+    @Slot()
+    def _on_instant_360v(self) -> None:
+        """Apply 360V/9A instant preset to the worker."""
+        if self._worker is not None:
+            self._worker.set_setpoints(360.0, 9.0)
+            self._worker.set_control(ChargerControl.HEATING_DC_SUPPLY)
+            self._worker.set_ramp_config(False, 5.0, 0.5)
+            self._worker.reset_ramp()
+
+    # ---- baudrate switch sequence ----------------------------------------
+
+    @Slot()
+    def _on_baudrate_switch(self) -> None:
+        if self._worker is None or self._worker._bus is None:
+            self._log_panel.append(
+                "Cannot switch baudrate: CAN not connected."
+            )
+            return
+        if self._baud_worker is not None and self._baud_worker.isRunning():
+            self._log_panel.append(
+                "Baudrate switch already in progress."
+            )
+            return
+
+        self._conn_panel.set_baud_switch_busy(True)
+        self._ctrl_panel.setEnabled(False)
+
+        self._baud_worker = BaudrateSwitchWorker(self._worker._bus)
+        self._baud_worker.progress.connect(self._on_baud_progress)
+        self._baud_worker.finished_ok.connect(self._on_baud_done)
+        self._baud_worker.error.connect(self._on_baud_error)
+        self._baud_worker.log_message.connect(self._log_panel.append)
+        self._baud_worker.start()
+
+    @Slot(int, int)
+    def _on_baud_progress(self, step: int, total: int) -> None:
+        self._conn_panel.set_baud_switch_progress(step, total)
+
+    @Slot()
+    def _on_baud_done(self) -> None:
+        self._conn_panel.set_baud_switch_done()
+        self._ctrl_panel.setEnabled(True)
+        self._baud_worker = None
+
+    @Slot(str)
+    def _on_baud_error(self, msg: str) -> None:
+        self._log_panel.append(f"ERROR: {msg}")
+        self._conn_panel.set_baud_switch_busy(False)
+        self._ctrl_panel.setEnabled(True)
+        self._baud_worker = None
+
     # ---- window close ----------------------------------------------------
 
     def closeEvent(self, event) -> None:
+        # Stop baudrate switch if running
+        if self._baud_worker is not None and self._baud_worker.isRunning():
+            self._baud_worker.request_stop()
+            self._baud_worker.wait(5000)
+            self._baud_worker = None
         self._on_disconnect()
         super().closeEvent(event)

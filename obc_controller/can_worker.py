@@ -32,6 +32,86 @@ log = logging.getLogger(__name__)
 
 SAFE_STOP_CYCLES = 5  # Send Control=1 this many times before disconnect
 
+# ---------------------------------------------------------------------------
+# Baudrate-switch CAN sequence constants
+# ---------------------------------------------------------------------------
+BAUD_SWITCH_ID = 0x01002100  # Extended CAN ID for baudrate commands
+BAUD_FRAME1 = bytes([0x07, 0x01, 0x00, 0x00, 0x3D, 0x8A, 0x09, 0x00])
+BAUD_FRAME2 = bytes([0x07, 0x02, 0x0E, 0x00, 0x71, 0xB7, 0x0F, 0x00])
+BAUD_FRAME2_COUNT = 7
+BAUD_FRAME2_INTERVAL_S = 0.5
+
+
+class BaudrateSwitchWorker(QThread):
+    """Sends the CAN baudrate-switch sequence in a background thread.
+
+    Sequence:
+      1. Send BAUD_FRAME1 once
+      2. Send BAUD_FRAME2 seven times at 500 ms intervals
+    """
+
+    progress = Signal(int, int)    # (current_step 1-based, total)
+    finished_ok = Signal()
+    error = Signal(str)
+    log_message = Signal(str)
+
+    def __init__(self, bus: can.Bus, parent=None):
+        super().__init__(parent)
+        self._bus = bus
+        self._running = True
+
+    def request_stop(self) -> None:
+        self._running = False
+
+    def run(self) -> None:
+        total = 1 + BAUD_FRAME2_COUNT  # 8 steps
+
+        # Step 1: send frame #1 once
+        frame1 = can.Message(
+            arbitration_id=BAUD_SWITCH_ID,
+            data=BAUD_FRAME1,
+            is_extended_id=True,
+        )
+        try:
+            self._bus.send(frame1)
+            self.log_message.emit(
+                f"Baudrate switch: sent frame #1 "
+                f"(ID=0x{BAUD_SWITCH_ID:08X}, data={BAUD_FRAME1.hex()})"
+            )
+            self.progress.emit(1, total)
+        except can.CanError as exc:
+            self.error.emit(f"Baudrate switch frame #1 TX error: {exc}")
+            return
+
+        # Steps 2-8: send frame #2 seven times @ 500 ms
+        frame2 = can.Message(
+            arbitration_id=BAUD_SWITCH_ID,
+            data=BAUD_FRAME2,
+            is_extended_id=True,
+        )
+        for i in range(BAUD_FRAME2_COUNT):
+            if not self._running:
+                self.log_message.emit("Baudrate switch aborted.")
+                return
+
+            time.sleep(BAUD_FRAME2_INTERVAL_S)
+
+            try:
+                self._bus.send(frame2)
+                step = 2 + i
+                self.log_message.emit(
+                    f"Baudrate switch: sent frame #2 ({i + 1}/{BAUD_FRAME2_COUNT})"
+                )
+                self.progress.emit(step, total)
+            except can.CanError as exc:
+                self.error.emit(
+                    f"Baudrate switch frame #2 [{i + 1}] TX error: {exc}"
+                )
+                return
+
+        self.log_message.emit("Baudrate switch sequence completed.")
+        self.finished_ok.emit()
+
 
 def _move_towards(current: float, target: float, max_step: float) -> float:
     """Move *current* towards *target* by at most *max_step*."""

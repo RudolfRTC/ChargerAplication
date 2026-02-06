@@ -31,6 +31,7 @@ from obc_controller.profiles import (
 class ControlPanel(QGroupBox):
     # voltage, current, control, ramp_enabled, ramp_v, ramp_a
     control_changed = Signal(float, float, int, bool, float, float)
+    instant_360v_requested = Signal()  # one-touch 360V/9A
     profile_loaded = Signal(object)  # Profile dataclass
     log_message = Signal(str)
 
@@ -109,6 +110,17 @@ class ControlPanel(QGroupBox):
         self._mode_label.setStyleSheet("font-weight: bold; font-size: 13px;")
         layout.addWidget(self._mode_label)
 
+        # ---- Instant preset ----
+        self._instant_btn = QPushButton("Set 360V / 9A (Instant)")
+        self._instant_btn.setStyleSheet(
+            "QPushButton { background-color: #9C27B0; color: white; "
+            "padding: 8px 16px; font-weight: bold; font-size: 13px; }"
+        )
+        self._instant_btn.setToolTip(
+            "One-touch: 360V / 9A, ramp OFF, Heating/DC Supply mode"
+        )
+        layout.addWidget(self._instant_btn)
+
         # ---- Ramp (soft-start) section ----
         ramp_group = QGroupBox("Ramp (soft-start)")
         ramp_layout = QVBoxLayout(ramp_group)
@@ -170,12 +182,27 @@ class ControlPanel(QGroupBox):
         self._ramp_v_spin.valueChanged.connect(self._emit_state)
         self._ramp_a_spin.valueChanged.connect(self._emit_state)
 
+        self._instant_btn.clicked.connect(self._on_instant_360v)
+
         self._load_btn.clicked.connect(self._on_load_profile)
         self._save_btn.clicked.connect(self._on_save_profile)
         self._delete_btn.clicked.connect(self._on_delete_profile)
 
         self._refresh_profiles()
         self.setEnabled(False)
+
+    # ---- Instant 360V / 9A preset ----
+
+    def _on_instant_360v(self) -> None:
+        self._voltage_spin.setValue(360.0)
+        self._current_spin.setValue(9.0)
+        self._ramp_check.setChecked(False)
+        self._set_control(ChargerControl.HEATING_DC_SUPPLY)
+        self._mode_label.setText("Mode: 360V / 9A INSTANT")
+        self.instant_360v_requested.emit()
+        self.log_message.emit(
+            "Instant preset: 360V / 9A, ramp OFF, Heating/DC Supply mode"
+        )
 
     # ---- Profile management ----
 
