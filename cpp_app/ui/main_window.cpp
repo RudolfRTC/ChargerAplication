@@ -1,6 +1,8 @@
 #include "ui/main_window.h"
 #include "ui/theme.h"
+#include "can_factory.h"
 
+#include <QApplication>
 #include <QCloseEvent>
 #include <QDialog>
 #include <QFrame>
@@ -166,6 +168,20 @@ void MainWindow::showAbout() {
     delete dlg;
 }
 
+// --- Simulator helper ---
+
+void MainWindow::startSimulator() {
+    m_simMode = true;
+    m_logPanel->append(QString::fromUtf8("Starting simulation mode \u2026"));
+    m_simulator = new Simulator;
+    connect(m_simulator, &Simulator::message2Received, this, &MainWindow::onMessage2);
+    connect(m_simulator, &Simulator::logMessage, m_logPanel, &LogPanel::append);
+    m_simulator->start();
+    m_connPanel->setConnected(true);
+    m_ctrlPanel->setEnabled(true);
+    m_telePanel->updateSetpoints(m_ctrlPanel->getVoltage(), m_ctrlPanel->getCurrent());
+}
+
 // --- Connection ---
 
 void MainWindow::onConnect(const QString& interface, const QString& channel,
@@ -174,19 +190,58 @@ void MainWindow::onConnect(const QString& interface, const QString& channel,
     m_simMode = simulate;
 
     if (simulate) {
-        m_logPanel->append(QString::fromUtf8("Starting simulation mode \u2026"));
-        m_simulator = new Simulator;
-        connect(m_simulator, &Simulator::message2Received, this, &MainWindow::onMessage2);
-        connect(m_simulator, &Simulator::logMessage, m_logPanel, &LogPanel::append);
-        m_simulator->start();
-        m_connPanel->setConnected(true);
-        m_ctrlPanel->setEnabled(true);
-        m_telePanel->updateSetpoints(m_ctrlPanel->getVoltage(), m_ctrlPanel->getCurrent());
+        startSimulator();
         return;
     }
 
-    m_worker = new CANWorker;
-    m_worker->setConnectionParams(interface, channel, bitrate);
+    // Determine backend: use UI selection, fall back to CLI/settings
+    QString backend = interface;
+    if (backend == "auto") {
+        QString appBackend = qApp->property("can_backend").toString();
+        if (!appBackend.isEmpty())
+            backend = appBackend;
+    }
+
+    // Create CAN interface via factory
+    std::string err;
+    auto iface = makeCanInterface(backend.toStdString(), &err);
+    if (!iface) {
+        // Backend not available on this platform
+        if (backend == "auto" || interface == "auto") {
+            m_logPanel->append(QString("CAN backend not available (%1), falling back to simulator.")
+                                   .arg(QString::fromStdString(err)));
+            startSimulator();
+            return;
+        }
+        m_logPanel->append("ERROR: " + QString::fromStdString(err));
+        return;
+    }
+
+    // Open the CAN interface
+    CanConfig cfg;
+    cfg.channel = channel.toStdString();
+    cfg.bitrate = bitrate;
+    cfg.extended = true;
+
+    if (!iface->open(cfg)) {
+        QString openErr = QString::fromStdString(iface->lastError());
+        if (backend == "auto" || interface == "auto") {
+            m_logPanel->append(QString("CAN init failed (%1), falling back to simulator.")
+                                   .arg(openErr));
+            startSimulator();
+            return;
+        }
+        m_logPanel->append("ERROR: " + openErr);
+        return;
+    }
+
+    m_logPanel->append(QString("CAN interface opened: %1 on %2 @ %3 bps")
+                           .arg(QString::fromStdString(iface->backendName()),
+                                channel,
+                                QString::number(bitrate)));
+
+    // Create and start worker with the opened interface
+    m_worker = new CANWorker(std::move(iface));
     m_worker->setSetpoints(m_ctrlPanel->getVoltage(), m_ctrlPanel->getCurrent());
     m_worker->setControl(m_ctrlPanel->getControl());
     auto [rampV, rampA] = m_ctrlPanel->getRampRates();
@@ -340,7 +395,7 @@ void MainWindow::onBaudrateSwitch() {
     m_ctrlPanel->setEnabled(false);
     m_graphPanel->addEventMarker("Baud switch START", "info");
 
-    m_baudWorker = new BaudrateSwitchWorker(m_worker->getSocketFd());
+    m_baudWorker = new BaudrateSwitchWorker(m_worker->getInterface());
     connect(m_baudWorker, &BaudrateSwitchWorker::progress, this, &MainWindow::onBaudProgress);
     connect(m_baudWorker, &BaudrateSwitchWorker::finishedOk, this, &MainWindow::onBaudDone);
     connect(m_baudWorker, &BaudrateSwitchWorker::error, this, &MainWindow::onBaudError);

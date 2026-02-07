@@ -1,6 +1,7 @@
 #include "ui/connection_panel.h"
 #include "ui/theme.h"
 
+#include <QApplication>
 #include <QHBoxLayout>
 #include <QVBoxLayout>
 
@@ -10,18 +11,27 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* layout = new QVBoxLayout(this);
     layout->setSpacing(8);
 
+    // Read CLI/settings defaults from QApplication properties
+    QString defBackend = qApp->property("can_backend").toString();
+    QString defChannel = qApp->property("can_channel").toString();
+    int     defBitrate = qApp->property("can_bitrate").toInt();
+
     // Row 1: backend
     auto* row1 = new QHBoxLayout;
     row1->addWidget(new QLabel("Backend:"));
     m_backendCombo = new QComboBox;
-    m_backendCombo->addItems({"socketcan", "pcan"});
+    m_backendCombo->addItems({"auto", "socketcan", "pcan"});
+    if (!defBackend.isEmpty()) {
+        int idx = m_backendCombo->findText(defBackend);
+        if (idx >= 0) m_backendCombo->setCurrentIndex(idx);
+    }
     row1->addWidget(m_backendCombo, 1);
     layout->addLayout(row1);
 
     // Row 2: channel
     auto* row2 = new QHBoxLayout;
     row2->addWidget(new QLabel("Channel:"));
-    m_channelEdit = new QLineEdit("can0");
+    m_channelEdit = new QLineEdit(defChannel.isEmpty() ? "can0" : defChannel);
     row2->addWidget(m_channelEdit, 1);
     layout->addLayout(row2);
 
@@ -29,7 +39,12 @@ ConnectionPanel::ConnectionPanel(QWidget* parent)
     auto* row3 = new QHBoxLayout;
     row3->addWidget(new QLabel("CAN bitrate:"));
     m_bitrateCombo = new QComboBox;
-    m_bitrateCombo->addItems({"250000", "500000"});
+    m_bitrateCombo->addItems({"250000", "500000", "1000000", "125000"});
+    if (defBitrate > 0) {
+        QString brStr = QString::number(defBitrate);
+        int idx = m_bitrateCombo->findText(brStr);
+        if (idx >= 0) m_bitrateCombo->setCurrentIndex(idx);
+    }
     row3->addWidget(m_bitrateCombo, 1);
     layout->addLayout(row3);
 
@@ -96,6 +111,13 @@ void ConnectionPanel::onBackendChanged(const QString& text) {
         m_channelEdit->setText("PCAN_USBBUS1");
     else if (text == "socketcan")
         m_channelEdit->setText("can0");
+    else if (text == "auto") {
+#ifdef _WIN32
+        m_channelEdit->setText("PCAN_USBBUS1");
+#else
+        m_channelEdit->setText("can0");
+#endif
+    }
 }
 
 void ConnectionPanel::onConnect() {

@@ -42,6 +42,8 @@ private slots:
     void showAbout();
 
 private:
+    void startSimulator();
+
     CANWorker*              m_worker = nullptr;
     Simulator*              m_simulator = nullptr;
     BaudrateSwitchWorker*   m_baudWorker = nullptr;
