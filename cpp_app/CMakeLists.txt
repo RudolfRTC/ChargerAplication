@@ -54,7 +54,7 @@ if(WIN32)
     set(WIN_RC app.rc)
 endif()
 
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${RESOURCES} ${WIN_RC})
+add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS} ${RESOURCES} ${WIN_RC})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Core

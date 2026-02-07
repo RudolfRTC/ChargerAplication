@@ -65,13 +65,17 @@ MainWindow::MainWindow(QWidget* parent)
     leftInner->addStretch();
 
     auto* leftScroll = new QScrollArea;
+    leftScroll->setFrameShape(QFrame::NoFrame);
     leftScroll->setWidgetResizable(true);
     leftScroll->setWidget(leftWidget);
     leftScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    leftScroll->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     bodySplitter->addWidget(leftScroll);
 
     // Center - Tabs + Telemetry
     auto* centerWidget = new QWidget;
+    centerWidget->setMinimumWidth(400);
+    centerWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* centerLay = new QVBoxLayout(centerWidget);
     centerLay->setContentsMargins(4, 4, 4, 4);
 
@@ -98,9 +102,11 @@ MainWindow::MainWindow(QWidget* parent)
     rightInner->addStretch();
 
     auto* rightScroll = new QScrollArea;
+    rightScroll->setFrameShape(QFrame::NoFrame);
     rightScroll->setWidgetResizable(true);
     rightScroll->setWidget(rightWidget);
     rightScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    rightScroll->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     bodySplitter->addWidget(rightScroll);
 
     bodySplitter->setStretchFactor(0, 2);

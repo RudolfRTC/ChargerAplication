@@ -81,7 +81,7 @@ ControlPanel::ControlPanel(QWidget* parent)
     m_currentSpin->setRange(0.0, 6553.5);
     m_currentSpin->setDecimals(1);
     m_currentSpin->setSingleStep(0.1);
-    m_currentSpin->setValue(50.0);
+    m_currentSpin->setValue(5.0);
     rowI->addWidget(m_currentSpin, 1);
     spLayout->addLayout(rowI);
     layout->addWidget(spGroup);
