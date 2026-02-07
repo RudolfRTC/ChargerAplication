@@ -7,7 +7,7 @@
 struct Profile {
     QString name;
     double voltage_set_v    = 320.0;
-    double current_set_a    = 50.0;
+    double current_set_a    = 5.0;
     QString mode            = "charging";  // "charging" | "heating"
     bool ramp_enabled       = false;
     double ramp_rate_v_per_s = 5.0;
