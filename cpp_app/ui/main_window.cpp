@@ -53,10 +53,12 @@ MainWindow::MainWindow(QWidget* parent)
     // 3-column body
     auto* bodySplitter = new QSplitter(Qt::Horizontal);
 
+    bodySplitter->setChildrenCollapsible(false);
+
     // Left sidebar - Connection
     auto* leftWidget = new QWidget;
     leftWidget->setObjectName("left_sidebar");
-    leftWidget->setMinimumWidth(240);
+    leftWidget->setMinimumWidth(260);
     leftWidget->setMaximumWidth(340);
     auto* leftInner = new QVBoxLayout(leftWidget);
     leftInner->setContentsMargins(6, 6, 6, 6);
@@ -74,7 +76,7 @@ MainWindow::MainWindow(QWidget* parent)
 
     // Center - Tabs + Telemetry
     auto* centerWidget = new QWidget;
-    centerWidget->setMinimumWidth(400);
+    centerWidget->setMinimumWidth(500);
     centerWidget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     auto* centerLay = new QVBoxLayout(centerWidget);
     centerLay->setContentsMargins(4, 4, 4, 4);
@@ -93,7 +95,7 @@ MainWindow::MainWindow(QWidget* parent)
     // Right sidebar - Control
     auto* rightWidget = new QWidget;
     rightWidget->setObjectName("right_sidebar");
-    rightWidget->setMinimumWidth(260);
+    rightWidget->setMinimumWidth(320);
     rightWidget->setMaximumWidth(380);
     auto* rightInner = new QVBoxLayout(rightWidget);
     rightInner->setContentsMargins(6, 6, 6, 6);
@@ -109,9 +111,10 @@ MainWindow::MainWindow(QWidget* parent)
     rightScroll->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     bodySplitter->addWidget(rightScroll);
 
-    bodySplitter->setStretchFactor(0, 2);
-    bodySplitter->setStretchFactor(1, 5);
-    bodySplitter->setStretchFactor(2, 2);
+    bodySplitter->setStretchFactor(0, 0);
+    bodySplitter->setStretchFactor(1, 1);
+    bodySplitter->setStretchFactor(2, 0);
+    bodySplitter->setSizes({280, 600, 340});
     root->addWidget(bodySplitter, 1);
 
     // Footer

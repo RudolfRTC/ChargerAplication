@@ -2,5 +2,6 @@
     <qresource prefix="/assets">
         <file alias="logo.png">assets/logo.png</file>
         <file alias="logocon.png">assets/logocon.png</file>
+        <file alias="app_icon.ico">assets/app_icon.ico</file>
     </qresource>
 </RCC>
