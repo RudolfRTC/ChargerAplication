@@ -46,7 +46,15 @@ set(HEADERS
     ui/log_panel.h
 )
 
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+# Qt resource file (embeds logo.png)
+set(RESOURCES resources.qrc)
+
+# Windows executable icon
+if(WIN32)
+    set(WIN_RC app.rc)
+endif()
+
+add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS} ${RESOURCES} ${WIN_RC})
 
 target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Core

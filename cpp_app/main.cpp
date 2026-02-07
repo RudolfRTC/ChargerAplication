@@ -1,6 +1,8 @@
 #include <QApplication>
 #include <QIcon>
 #include <QDir>
+#include <QPixmap>
+#include <QSplashScreen>
 #include <QCommandLineParser>
 #include <QCommandLineOption>
 
@@ -16,10 +18,15 @@ int main(int argc, char* argv[]) {
     app.setStyle("Fusion");
     app.setStyleSheet(appStyleSheet());
 
-    // Try to load app icon from assets directory next to executable
-    QString iconPath = QCoreApplication::applicationDirPath() + "/../obc_controller/ui/assets/app_icon.png";
-    if (QFile::exists(iconPath))
-        app.setWindowIcon(QIcon(iconPath));
+    // Set application window icon (embedded via resources.qrc on all platforms,
+    // .ico baked into executable via app.rc on Windows)
+    app.setWindowIcon(QIcon(":/assets/logo.png"));
+
+    // --- Splash screen (company logo from embedded resources) ---
+    QPixmap splashPix(":/assets/logo.png");
+    QSplashScreen splash(splashPix);
+    splash.show();
+    app.processEvents();
 
     // --- CLI argument parsing ---
     QCommandLineParser parser;
@@ -69,6 +76,7 @@ int main(int argc, char* argv[]) {
 
     // --- Self-test mode ---
     if (parser.isSet(testOpt)) {
+        splash.close();
         return runCanSelfTest(canSettings.backend, canSettings.channel, canSettings.bitrate);
     }
 
@@ -79,6 +87,7 @@ int main(int argc, char* argv[]) {
 
     MainWindow window;
     window.show();
+    splash.finish(&window);
 
     return app.exec();
 }
