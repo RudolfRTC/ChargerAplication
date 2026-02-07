@@ -4,8 +4,10 @@
 #include <QMutex>
 #include <QMutexLocker>
 #include <deque>
+#include <memory>
 
 #include "can_protocol.h"
+#include "can_iface.h"
 
 // Baudrate-switch CAN sequence constants
 constexpr uint32_t BAUD_SWITCH_ID = 0x01002100;
@@ -28,7 +30,7 @@ inline const char* statusBitName(int bit) {
 class BaudrateSwitchWorker : public QThread {
     Q_OBJECT
 public:
-    explicit BaudrateSwitchWorker(int socketFd, QObject* parent = nullptr);
+    explicit BaudrateSwitchWorker(ICanIface* iface, QObject* parent = nullptr);
     void requestStop();
 
 signals:
@@ -41,17 +43,17 @@ protected:
     void run() override;
 
 private:
-    int m_socketFd = -1;
+    ICanIface* m_iface = nullptr;
     bool m_running = true;
 };
 
 class CANWorker : public QThread {
     Q_OBJECT
 public:
-    explicit CANWorker(QObject* parent = nullptr);
+    /// Construct with an already-opened CAN interface (takes ownership).
+    explicit CANWorker(std::unique_ptr<ICanIface> iface, QObject* parent = nullptr);
 
     // Thread-safe setters (called from UI thread)
-    void setConnectionParams(const QString& interface, const QString& channel, int bitrate);
     void setSetpoints(double voltage, double current);
     void setControl(ChargerControl ctrl);
     void setRampConfig(bool enabled, double rateV, double rateA);
@@ -59,7 +61,8 @@ public:
     void enableTx(bool enabled);
     void requestStop();
 
-    int getSocketFd() const;
+    /// Access the underlying CAN interface (for BaudrateSwitchWorker).
+    ICanIface* getInterface() const;
     bool isBusConnected() const;
 
 signals:
@@ -79,11 +82,9 @@ protected:
 
 private:
     void safeStop();
-    void closeBus();
-    bool sendCanFrame(uint32_t id, const uint8_t* data, uint8_t dlc);
     double calcRate(const std::deque<double>& times, double now, double window = 2.0) const;
 
-    int m_socketFd = -1;
+    std::unique_ptr<ICanIface> m_iface;
     mutable QMutex m_mutex;
     bool m_running = false;
 
@@ -98,11 +99,6 @@ private:
     double m_rampRateV = 5.0;
     double m_rampRateA = 0.5;
     bool m_rampResetFlag = false;
-
-    // Connection parameters
-    QString m_interface = "socketcan";
-    QString m_channel = "can0";
-    int m_bitrate = 250000;
 
     // Health tracking
     std::deque<double> m_txTimes;

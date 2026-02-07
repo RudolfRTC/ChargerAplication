@@ -12,6 +12,9 @@ set(SOURCES
     main.cpp
     can_protocol.cpp
     can_worker.cpp
+    can_factory.cpp
+    can_socketcan_linux.cpp
+    can_pcan_windows.cpp
     simulator.cpp
     settings.cpp
     profiles.cpp
@@ -25,8 +28,12 @@ set(SOURCES
 )
 
 set(HEADERS
+    can_iface.h
     can_protocol.h
     can_worker.h
+    can_factory.h
+    can_socketcan_linux.h
+    can_pcan_windows.h
     simulator.h
     settings.h
     profiles.h
@@ -48,3 +55,39 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+# --- Platform-specific CAN backend configuration ---
+
+if(WIN32)
+    # PCAN-Basic: uses dynamic DLL loading (LoadLibrary) at runtime,
+    # so no compile-time .lib dependency is required.
+    # PCANBasic.dll must be in PATH or next to the executable at runtime.
+    #
+    # Optional: if you have the PCAN-Basic SDK installed and want static
+    # linking instead of dynamic loading, uncomment the following lines
+    # and set the correct path to your PCAN-Basic SDK:
+    #
+    # set(PCAN_SDK_DIR "C:/Program Files/PEAK-System/PCAN-Basic API")
+    # target_include_directories(${PROJECT_NAME} PRIVATE "${PCAN_SDK_DIR}/Include")
+    # target_link_libraries(${PROJECT_NAME} PRIVATE "${PCAN_SDK_DIR}/x64/VC_LIB/PCANBasic.lib")
+    # target_compile_definitions(${PROJECT_NAME} PRIVATE PCAN_STATIC_LINK=1)
+    #
+    # Post-build step: copy PCANBasic.dll to the output directory (if available).
+    # Adjust the path if your DLL is located elsewhere.
+    set(PCAN_DLL_PATH "C:/Program Files/PEAK-System/PCAN-Basic API/x64/PCANBasic.dll")
+    if(EXISTS "${PCAN_DLL_PATH}")
+        add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${PCAN_DLL_PATH}"
+                "$<TARGET_FILE_DIR:${PROJECT_NAME}>/PCANBasic.dll"
+            COMMENT "Copying PCANBasic.dll to output directory"
+        )
+    endif()
+endif()
+
+if(UNIX AND NOT APPLE)
+    # SocketCAN uses the system's CAN socket API (no extra libraries needed).
+    # pthread is typically linked automatically by Qt, but ensure it's available.
+    find_package(Threads REQUIRED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE Threads::Threads)
+endif()

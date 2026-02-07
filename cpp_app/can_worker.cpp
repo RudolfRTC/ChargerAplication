@@ -6,17 +6,6 @@
 #include <algorithm>
 #include <chrono>
 
-#ifdef __linux__
-#include <sys/socket.h>
-#include <sys/ioctl.h>
-#include <net/if.h>
-#include <linux/can.h>
-#include <linux/can/raw.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
-#endif
-
 static double monoNow() {
     auto now = std::chrono::steady_clock::now();
     return std::chrono::duration<double>(now.time_since_epoch()).count();
@@ -34,25 +23,31 @@ static double moveTowards(double current, double target, double maxStep) {
 static const uint8_t BAUD_FRAME1_DATA[] = {0x07, 0x01, 0x00, 0x00, 0x3D, 0x8A, 0x09, 0x00};
 static const uint8_t BAUD_FRAME2_DATA[] = {0x07, 0x02, 0x0E, 0x00, 0x71, 0xB7, 0x0F, 0x00};
 
-BaudrateSwitchWorker::BaudrateSwitchWorker(int socketFd, QObject* parent)
-    : QThread(parent), m_socketFd(socketFd) {}
+BaudrateSwitchWorker::BaudrateSwitchWorker(ICanIface* iface, QObject* parent)
+    : QThread(parent), m_iface(iface) {}
 
 void BaudrateSwitchWorker::requestStop() {
     m_running = false;
 }
 
 void BaudrateSwitchWorker::run() {
-#ifdef __linux__
+    if (!m_iface || !m_iface->isOpen()) {
+        emit error("CAN interface not available for baudrate switch.");
+        return;
+    }
+
     int total = 1 + BAUD_FRAME2_COUNT;
 
     // Step 1: send frame #1
-    struct can_frame frame{};
-    frame.can_id = BAUD_SWITCH_ID | CAN_EFF_FLAG;
-    frame.can_dlc = 8;
+    CanFrame frame;
+    frame.id = BAUD_SWITCH_ID;
+    frame.isExtended = true;
+    frame.dlc = 8;
     std::memcpy(frame.data, BAUD_FRAME1_DATA, 8);
 
-    if (::write(m_socketFd, &frame, sizeof(frame)) < 0) {
-        emit error(QString("Baudrate switch frame #1 TX error: %1").arg(strerror(errno)));
+    if (!m_iface->send(frame)) {
+        emit error(QString("Baudrate switch frame #1 TX error: %1")
+                       .arg(QString::fromStdString(m_iface->lastError())));
         return;
     }
     emit logMessage(QString("Baudrate switch: sent frame #1 (ID=0x%1)")
@@ -67,9 +62,10 @@ void BaudrateSwitchWorker::run() {
             return;
         }
         QThread::msleep(static_cast<unsigned long>(BAUD_FRAME2_INTERVAL_S * 1000));
-        if (::write(m_socketFd, &frame, sizeof(frame)) < 0) {
+        if (!m_iface->send(frame)) {
             emit error(QString("Baudrate switch frame #2 [%1] TX error: %2")
-                           .arg(i + 1).arg(strerror(errno)));
+                           .arg(i + 1)
+                           .arg(QString::fromStdString(m_iface->lastError())));
             return;
         }
         emit logMessage(QString("Baudrate switch: sent frame #2 (%1/%2)")
@@ -79,21 +75,12 @@ void BaudrateSwitchWorker::run() {
 
     emit logMessage("Baudrate switch sequence completed.");
     emit finishedOk();
-#else
-    emit error("Baudrate switch not supported on this platform (Linux only).");
-#endif
 }
 
 // === CANWorker ===
 
-CANWorker::CANWorker(QObject* parent) : QThread(parent) {}
-
-void CANWorker::setConnectionParams(const QString& interface, const QString& channel, int bitrate) {
-    QMutexLocker lock(&m_mutex);
-    m_interface = interface;
-    m_channel = channel;
-    m_bitrate = bitrate;
-}
+CANWorker::CANWorker(std::unique_ptr<ICanIface> iface, QObject* parent)
+    : QThread(parent), m_iface(std::move(iface)) {}
 
 void CANWorker::setSetpoints(double voltage, double current) {
     QMutexLocker lock(&m_mutex);
@@ -128,12 +115,12 @@ void CANWorker::requestStop() {
     m_running = false;
 }
 
-int CANWorker::getSocketFd() const {
-    return m_socketFd;
+ICanIface* CANWorker::getInterface() const {
+    return m_iface.get();
 }
 
 bool CANWorker::isBusConnected() const {
-    return m_socketFd >= 0;
+    return m_iface && m_iface->isOpen();
 }
 
 double CANWorker::calcRate(const std::deque<double>& times, double now, double window) const {
@@ -145,73 +132,15 @@ double CANWorker::calcRate(const std::deque<double>& times, double now, double w
     return static_cast<double>(count) / window;
 }
 
-bool CANWorker::sendCanFrame(uint32_t id, const uint8_t* data, uint8_t dlc) {
-#ifdef __linux__
-    struct can_frame frame{};
-    frame.can_id = id | CAN_EFF_FLAG;  // Extended frame
-    frame.can_dlc = dlc;
-    std::memcpy(frame.data, data, dlc);
-    ssize_t nbytes = ::write(m_socketFd, &frame, sizeof(frame));
-    return nbytes == sizeof(frame);
-#else
-    (void)id; (void)data; (void)dlc;
-    return false;
-#endif
-}
-
 void CANWorker::run() {
-#ifdef __linux__
-    // Read connection params
-    QString iface, chan;
-    int brate;
-    {
-        QMutexLocker lock(&m_mutex);
-        iface = m_interface;
-        chan = m_channel;
-        brate = m_bitrate;
-    }
-
-    // Open SocketCAN
-    m_socketFd = ::socket(PF_CAN, SOCK_RAW, CAN_RAW);
-    if (m_socketFd < 0) {
-        QString msg = QString("CAN socket creation failed: %1").arg(strerror(errno));
-        emit logMessage(msg);
-        emit error(msg);
+    if (!m_iface || !m_iface->isOpen()) {
+        emit error("CAN interface not available or not open.");
         emit disconnected();
         return;
     }
 
-    struct ifreq ifr{};
-    std::strncpy(ifr.ifr_name, chan.toStdString().c_str(), IFNAMSIZ - 1);
-    if (::ioctl(m_socketFd, SIOCGIFINDEX, &ifr) < 0) {
-        QString msg = QString("CAN interface '%1' not found: %2").arg(chan, strerror(errno));
-        emit logMessage(msg);
-        emit error(msg);
-        ::close(m_socketFd);
-        m_socketFd = -1;
-        emit disconnected();
-        return;
-    }
-
-    struct sockaddr_can addr{};
-    addr.can_family = AF_CAN;
-    addr.can_ifindex = ifr.ifr_ifindex;
-
-    if (::bind(m_socketFd, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) < 0) {
-        QString msg = QString("CAN bind failed: %1").arg(strerror(errno));
-        emit logMessage(msg);
-        emit error(msg);
-        ::close(m_socketFd);
-        m_socketFd = -1;
-        emit disconnected();
-        return;
-    }
-
-    // Set non-blocking for recv with poll
-    int flags = ::fcntl(m_socketFd, F_GETFL, 0);
-    ::fcntl(m_socketFd, F_SETFL, flags | O_NONBLOCK);
-
-    emit logMessage(QString("CAN bus connected on %1.").arg(chan));
+    emit logMessage(QString("CAN bus connected via %1.")
+                        .arg(QString::fromStdString(m_iface->backendName())));
     emit connected();
 
     {
@@ -294,14 +223,22 @@ void CANWorker::run() {
             msg1.control = ctrl;
 
             auto payload = msg1.encode();
-            if (sendCanFrame(MSG1_ID, payload.data(), 8)) {
+
+            CanFrame txFrame;
+            txFrame.id = MSG1_ID;
+            txFrame.dlc = 8;
+            txFrame.isExtended = true;
+            std::memcpy(txFrame.data, payload.data(), 8);
+
+            if (m_iface->send(txFrame)) {
                 lastTxTime = now;
                 m_txTimes.push_back(now);
                 if (m_txTimes.size() > 20) m_txTimes.pop_front();
                 emit txMessage(msg1);
                 emit rampState(rampActive, sendV, sendA);
             } else {
-                emit logMessage(QString("TX error: %1").arg(strerror(errno)));
+                emit logMessage(QString("TX error: %1")
+                                    .arg(QString::fromStdString(m_iface->lastError())));
             }
 
             double txRate = calcRate(m_txTimes, now);
@@ -310,45 +247,36 @@ void CANWorker::run() {
             emit healthStats(txRate, rxRate, rxAge);
         }
 
-        // RX (poll with 50ms timeout)
-        struct pollfd pfd{};
-        pfd.fd = m_socketFd;
-        pfd.events = POLLIN;
-        int ret = ::poll(&pfd, 1, 50);
+        // RX (50ms timeout)
+        CanFrame rxFrame;
+        if (m_iface->recv(rxFrame, 50)) {
+            if (rxFrame.id == MSG2_ID) {
+                try {
+                    Message2 msg2 = Message2::decode(rxFrame.data, rxFrame.dlc);
+                    emit message2Received(msg2);
+                    lastRxTime = now;
+                    m_rxTimes.push_back(now);
+                    if (m_rxTimes.size() > 20) m_rxTimes.pop_front();
 
-        if (ret > 0 && (pfd.revents & POLLIN)) {
-            struct can_frame rxFrame{};
-            ssize_t nbytes = ::read(m_socketFd, &rxFrame, sizeof(rxFrame));
-            if (nbytes == sizeof(rxFrame)) {
-                uint32_t rxId = rxFrame.can_id & CAN_EFF_MASK;
-                if (rxId == MSG2_ID) {
-                    try {
-                        Message2 msg2 = Message2::decode(rxFrame.data, rxFrame.can_dlc);
-                        emit message2Received(msg2);
-                        lastRxTime = now;
-                        m_rxTimes.push_back(now);
-                        if (m_rxTimes.size() > 20) m_rxTimes.pop_front();
+                    if (alarmActive) {
+                        alarmActive = false;
+                        emit logMessage("Message2 received \u2014 timeout cleared.");
+                    }
 
-                        if (alarmActive) {
-                            alarmActive = false;
-                            emit logMessage("Message2 received \u2014 timeout cleared.");
-                        }
-
-                        // Detect status bit changes
-                        int newStatus = msg2.status.toByte();
-                        if (m_prevStatusByte >= 0) {
-                            int xorBits = newStatus ^ m_prevStatusByte;
-                            for (int bit = 0; bit < 5; ++bit) {
-                                if (xorBits & (1 << bit)) {
-                                    bool isFault = (newStatus & (1 << bit)) != 0;
-                                    emit statusBitChanged(bit, QString(statusBitName(bit)), isFault);
-                                }
+                    // Detect status bit changes
+                    int newStatus = msg2.status.toByte();
+                    if (m_prevStatusByte >= 0) {
+                        int xorBits = newStatus ^ m_prevStatusByte;
+                        for (int bit = 0; bit < 5; ++bit) {
+                            if (xorBits & (1 << bit)) {
+                                bool isFault = (newStatus & (1 << bit)) != 0;
+                                emit statusBitChanged(bit, QString(statusBitName(bit)), isFault);
                             }
                         }
-                        m_prevStatusByte = newStatus;
-                    } catch (const std::exception& e) {
-                        emit logMessage(QString("Message2 decode error: %1").arg(e.what()));
                     }
+                    m_prevStatusByte = newStatus;
+                } catch (const std::exception& e) {
+                    emit logMessage(QString("Message2 decode error: %1").arg(e.what()));
                 }
             }
         }
@@ -364,17 +292,18 @@ void CANWorker::run() {
     }
 
     safeStop();
-    closeBus();
-    emit disconnected();
 
-#else
-    emit error("CAN not supported on this platform (Linux SocketCAN only).");
+    // Close CAN bus
+    if (m_iface) {
+        m_iface->close();
+        emit logMessage("CAN bus closed.");
+    }
+
     emit disconnected();
-#endif
 }
 
 void CANWorker::safeStop() {
-    if (m_socketFd < 0) return;
+    if (!m_iface || !m_iface->isOpen()) return;
     emit logMessage("Safe-stop: sending Control=STOP \u2026");
 
     Message1 msg1;
@@ -383,20 +312,16 @@ void CANWorker::safeStop() {
     msg1.control = ChargerControl::STOP_OUTPUTTING;
     auto payload = msg1.encode();
 
+    CanFrame frame;
+    frame.id = MSG1_ID;
+    frame.dlc = 8;
+    frame.isExtended = true;
+    std::memcpy(frame.data, payload.data(), 8);
+
     for (int i = 0; i < SAFE_STOP_CYCLES; ++i) {
-        if (!sendCanFrame(MSG1_ID, payload.data(), 8))
+        if (!m_iface->send(frame))
             break;
         QThread::msleep(CYCLE_MS);
     }
     emit logMessage("Safe-stop complete.");
-}
-
-void CANWorker::closeBus() {
-#ifdef __linux__
-    if (m_socketFd >= 0) {
-        ::close(m_socketFd);
-        m_socketFd = -1;
-        emit logMessage("CAN bus closed.");
-    }
-#endif
 }
