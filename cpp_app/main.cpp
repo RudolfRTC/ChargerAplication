@@ -23,8 +23,8 @@ int main(int argc, char* argv[]) {
     app.setStyle("Fusion");
     app.setStyleSheet(appStyleSheet());
 
-    // Window / taskbar icon (logocon.png = app icon)
-    app.setWindowIcon(QIcon(":/assets/logocon.png"));
+    // Window / taskbar icon (ICO with multiple sizes for crisp HiDPI rendering)
+    app.setWindowIcon(QIcon(":/assets/app_icon.ico"));
 
     // --- Splash screen (company logo, scaled smoothly for HiDPI) ---
     QPixmap splashPix(":/assets/logo.png");
